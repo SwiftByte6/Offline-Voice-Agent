@@ -28,7 +28,7 @@ python -m venv engine\.venv
 ### Terminal 1 — Start the Python Speech Engine (FastAPI + Faster-Whisper)
 
 ```powershell
-.\engine\.venv\Scripts\python.exe -m uvicorn engine.main:app --host 127.0.0.1 --port 8000
+.\engine\.venv\Scripts\python.exe -m uvicorn engine.main:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
 - Wait until you see `Faster-Whisper model 'base' is ready.`
