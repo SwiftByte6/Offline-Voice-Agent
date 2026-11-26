@@ -7,12 +7,21 @@ import tempfile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
+import cv2
+import numpy as np
+
 from engine.speech.whisper_service import (
     InvalidAudioError,
     ModelLoadingError,
     ModelUnavailableError,
     TranscriptionError,
     WhisperService,
+)
+from engine.vision.service import (
+    capture_screen,
+    execute_action,
+    run_ocr,
+    screenshot_base64,
 )
 
 ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".ogg", ".opus", ".mp3", ".m4a", ".mp4", ".flac"}
@@ -150,3 +159,55 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...)) -> di
         await file.close()
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+@router.get("/api/screen")
+async def get_screen() -> dict:
+    """Capture the primary monitor and return it as base64 PNG."""
+    image_b64, width, height = screenshot_base64()
+    return {"image": image_b64, "width": width, "height": height}
+
+
+@router.post("/api/ocr")
+async def ocr_screen(file: UploadFile | None = File(None)) -> dict:
+    """Run OCR on an uploaded image or (by default) the current screen."""
+    if file is not None:
+        data = await file.read()
+        await file.close()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(status_code=400, detail="Could not decode uploaded image.")
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    else:
+        from engine.vision.service import capture_screen_array
+
+        image, _, _ = capture_screen_array()
+
+    items = run_ocr(image)
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/api/act")
+async def act(request: Request) -> dict:
+    """Execute a desktop action (click/type/hotkey/scroll/move)."""
+    try:
+        action = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+
+    if not isinstance(action, dict):
+        raise HTTPException(status_code=400, detail="Action must be a JSON object.")
+
+    # Attach screen dimensions for coordinate scaling when missing.
+    if "src_w" not in action or "src_h" not in action:
+        try:
+            from engine.vision.service import capture_screen_array
+
+            _, w, h = capture_screen_array()
+            action.setdefault("src_w", w)
+            action.setdefault("src_h", h)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return execute_action(action)

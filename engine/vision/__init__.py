@@ -1,0 +1,1 @@
+"""Vision helpers for NOVA: screen capture, OCR, and desktop actions."""
