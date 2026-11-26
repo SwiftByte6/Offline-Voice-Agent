@@ -1,6 +1,12 @@
+use tauri::webview::{PermissionKind, PermissionResponse};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .on_permission_request(|_webview, kind| match kind {
+      PermissionKind::Microphone => PermissionResponse::Allow,
+      _ => PermissionResponse::Default,
+    })
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

@@ -3,23 +3,39 @@
 import { memo } from "react";
 
 /**
- * Circular translucent purple glass Send button with upward arrow icon.
+ * Circular translucent purple glass action button:
+ * stops & sends during recording, retries on error when audio is cached.
  */
-function SendButton({ onSend, isSentFeedback }) {
+function SendButton({ status, canRetry, disabled, onClick }) {
+  const isRecording = status === "recording";
+  const isProcessing = status === "processing";
+  const isRetry = status === "error" && canRetry;
+
   const stopDrag = (event) => {
     event.stopPropagation();
   };
 
+  const label = isRecording
+    ? "Stop recording and transcribe"
+    : isRetry
+      ? "Retry transcription"
+      : isProcessing
+        ? "Processing audio"
+        : "Transcribe audio";
+
   return (
     <button
       type="button"
-      onClick={onSend}
+      onClick={onClick}
       onMouseDown={stopDrag}
       onPointerDown={stopDrag}
-      aria-label="Send voice clip"
-      className={`nova-circle-btn nova-send-btn group relative flex h-[50px] w-[50px] shrink-0 cursor-pointer items-center justify-center rounded-full text-white outline-none transition-transform duration-150 ease-out hover:scale-[1.04] active:scale-[0.95] focus-visible:ring-2 focus-visible:ring-purple-200/70 ${
-        isSentFeedback ? "ring-2 ring-purple-200/80" : ""
-      }`}
+      disabled={disabled}
+      aria-label={label}
+      className={`nova-circle-btn nova-send-btn group relative flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-full text-white outline-none transition-all duration-150 ease-out focus-visible:ring-2 focus-visible:ring-purple-200/70 ${
+        disabled
+          ? "cursor-default opacity-45"
+          : "cursor-pointer hover:scale-[1.04] active:scale-[0.95]"
+      } ${isRecording ? "ring-1 ring-purple-200/65" : ""}`}
     >
       <span
         aria-hidden="true"
@@ -35,10 +51,8 @@ function SendButton({ onSend, isSentFeedback }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden="true"
-        className={`relative z-10 transition-transform duration-150 ${
-          isSentFeedback
-            ? "-translate-y-0.5 scale-105"
-            : "group-hover:-translate-y-0.5"
+        className={`pointer-events-none relative z-10 transition-transform duration-150 ${
+          disabled ? "" : "group-hover:-translate-y-0.5"
         }`}
       >
         <path d="M12 19V5" />
