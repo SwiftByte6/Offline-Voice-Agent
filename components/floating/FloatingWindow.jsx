@@ -1,29 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { IDLE_WAVEFORM_LEVELS, useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { checkBackendHealth, transcribeAudioBlob } from "@/lib/speechApi";
 import {
   PILL_WINDOW_SIZE,
   enforceFloatingWindowBehavior,
   positionInitialFloatingWindow,
 } from "@/lib/tauriWindow";
-import VoicePill from "./VoicePill";
+import GlassSurface from "./GlassSurface";
 
 const INITIAL_STATE = {
   status: "idle", // "idle" | "starting" | "recording" | "processing" | "success" | "error"
-  elapsedSeconds: 0,
   transcript: "",
   transcriptMeta: null,
   errorMessage: "",
 };
+
+const COMPACT_WAVE_PROFILE = [
+  { index: 3, shape: 0.22 },
+  { index: 7, shape: 0.34 },
+  { index: 11, shape: 0.52 },
+  { index: 15, shape: 0.72 },
+  { index: 19, shape: 0.9 },
+  { index: 22, shape: 1.0 },
+  { index: 25, shape: 0.9 },
+  { index: 29, shape: 0.72 },
+  { index: 33, shape: 0.52 },
+  { index: 37, shape: 0.34 },
+  { index: 41, shape: 0.22 },
+];
 
 function voiceReducer(state, action) {
   switch (action.type) {
     case "START_MIC":
       return {
         status: "starting",
-        elapsedSeconds: 0,
         transcript: "",
         transcriptMeta: null,
         errorMessage: "",
@@ -32,14 +44,7 @@ function voiceReducer(state, action) {
       return {
         ...state,
         status: "recording",
-        elapsedSeconds: 0,
         errorMessage: "",
-      };
-    case "TICK_TIMER":
-      if (state.status !== "recording") return state;
-      return {
-        ...state,
-        elapsedSeconds: state.elapsedSeconds + 1,
       };
     case "START_PROCESSING":
       return {
@@ -74,8 +79,8 @@ function voiceReducer(state, action) {
 }
 
 /**
- * Top-level floating voice overlay controller.
- * Coordinates microphone capture, FastAPI Qwen3-ASR transcription, and Tauri window setup.
+ * Unified floating voice overlay: starts as a compact circular glass mic button
+ * and expands into a small frosted glass pill with cancel, live waveform, and send actions.
  */
 export default function FloatingWindow() {
   const [state, dispatch] = useReducer(voiceReducer, INITIAL_STATE);
@@ -85,6 +90,7 @@ export default function FloatingWindow() {
     modelStatus: "loading",
   });
   const [hasRetryBlob, setHasRetryBlob] = useState(false);
+  const [showTapGuide, setShowTapGuide] = useState(true);
 
   const lastAudioBlobRef = useRef(null);
   const requestAbortRef = useRef(null);
@@ -94,11 +100,11 @@ export default function FloatingWindow() {
     dispatch({ type: "SET_ERROR", message });
   }, []);
 
-  const { audioLevels, startRecording, stopRecording } = useVoiceRecorder({
-    onUnexpectedError: handleRecorderError,
-  });
+  const { audioLevels, startRecording, stopRecording, cleanupAudioResources } =
+    useVoiceRecorder({
+      onUnexpectedError: handleRecorderError,
+    });
 
-  // Initialize native Tauri floating window behavior once on mount
   useEffect(() => {
     let active = true;
 
@@ -117,7 +123,6 @@ export default function FloatingWindow() {
     };
   }, []);
 
-  // Poll backend health lightly until model is ready (and recover if backend starts later)
   useEffect(() => {
     let active = true;
     let pollTimerId = null;
@@ -144,26 +149,13 @@ export default function FloatingWindow() {
     };
   }, []);
 
-  // Recording elapsed timer
-  useEffect(() => {
-    if (state.status !== "recording") return undefined;
-
-    const intervalId = window.setInterval(() => {
-      dispatch({ type: "TICK_TIMER" });
-    }, 1000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [state.status]);
-
   const submitAudioForTranscription = useCallback(async (audioBlob) => {
     if (!audioBlob || audioBlob.size === 0) {
       lastAudioBlobRef.current = null;
       setHasRetryBlob(false);
       dispatch({
         type: "SET_ERROR",
-        message: "No audio captured. Hold a moment and try speaking again.",
+        message: "No audio captured. Try speaking again.",
       });
       return;
     }
@@ -200,6 +192,7 @@ export default function FloatingWindow() {
         duration: result.duration,
       });
     } catch (error) {
+      if (error?.name === "AbortError") return;
       dispatch({
         type: "SET_ERROR",
         message: error?.message || "Failed to transcribe recording.",
@@ -237,6 +230,7 @@ export default function FloatingWindow() {
 
     lastAudioBlobRef.current = null;
     setHasRetryBlob(false);
+    setShowTapGuide(false);
     dispatch({ type: "START_MIC" });
 
     try {
@@ -257,14 +251,6 @@ export default function FloatingWindow() {
     }
   }, [state.status, startRecording]);
 
-  const handlePrimaryAction = useCallback(() => {
-    if (state.status === "recording") {
-      handleStopAndTranscribe();
-    } else if (state.status !== "starting" && state.status !== "processing") {
-      handleStartRecording();
-    }
-  }, [state.status, handleStopAndTranscribe, handleStartRecording]);
-
   const handleRetry = useCallback(() => {
     if (state.status !== "error" || !lastAudioBlobRef.current) return;
     submitAudioForTranscription(lastAudioBlobRef.current);
@@ -275,31 +261,327 @@ export default function FloatingWindow() {
       handleStopAndTranscribe();
     } else if (state.status === "error" && lastAudioBlobRef.current) {
       handleRetry();
+    } else if (state.status === "success") {
+      handleStartRecording();
     }
-  }, [state.status, handleStopAndTranscribe, handleRetry]);
+  }, [state.status, handleStopAndTranscribe, handleRetry, handleStartRecording]);
 
   const handleDismiss = useCallback(() => {
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    isSubmittingRef.current = false;
+    cleanupAudioResources();
     lastAudioBlobRef.current = null;
     setHasRetryBlob(false);
     dispatch({ type: "DISMISS" });
-  }, []);
+  }, [cleanupAudioResources]);
+
+  const stopDrag = (event) => {
+    event.stopPropagation();
+  };
+
+  const isIdle = state.status === "idle";
+  const isStarting = state.status === "starting";
+  const isRecording = state.status === "recording";
+  const isProcessing = state.status === "processing";
+  const isSuccess = state.status === "success";
+  const isError = state.status === "error";
+
+  const canSendAction =
+    isRecording || (isError && hasRetryBlob) || isSuccess;
+
+  const backendNotice = !backendHealth.reachable
+    ? "Speech engine offline"
+    : backendHealth.modelStatus === "loading"
+      ? "Loading speech model..."
+      : "Start voice recording";
+
+  const pillWidth = isSuccess || isError ? 308 : 224;
+  const pillHeight = isSuccess || isError ? 58 : 52;
+  const pillRadius = pillHeight / 2;
 
   return (
     <main className="flex h-screen w-screen items-center justify-center bg-transparent">
-      <VoicePill
-        status={state.status}
-        audioLevels={audioLevels}
-        elapsedSeconds={state.elapsedSeconds}
-        transcript={state.transcript}
-        transcriptMeta={state.transcriptMeta}
-        errorMessage={state.errorMessage}
-        canRetry={hasRetryBlob}
-        backendHealth={backendHealth}
-        onPrimaryAction={handlePrimaryAction}
-        onSendAction={handleSendAction}
-        onRetry={handleRetry}
-        onDismiss={handleDismiss}
-      />
+      {isIdle ? (
+        <div className="flex flex-col items-center gap-1.5">
+          {showTapGuide && (
+            <button
+              type="button"
+              onClick={handleStartRecording}
+              className="cursor-pointer rounded-full border border-white/60 bg-white/65 px-2.5 py-0.5 text-[11px] font-medium tracking-tight text-neutral-900 shadow-sm backdrop-blur-md transition-all duration-150 hover:bg-white/80"
+            >
+              Tap to speech
+            </button>
+          )}
+          <GlassSurface
+            width={52}
+            height={52}
+            borderRadius={26}
+            borderWidth={0.08}
+            brightness={50}
+            opacity={0.93}
+            blur={10}
+            displace={0.5}
+            backgroundOpacity={0.2}
+            saturation={1.2}
+            distortionScale={-180}
+            redOffset={0}
+            greenOffset={10}
+            blueOffset={20}
+            className="transition-transform duration-200 ease-out hover:scale-105 active:scale-95"
+          >
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-[inherit]"
+              style={{
+                background: "rgba(255, 255, 255, 0.5)",
+                border: "1px solid rgba(255, 255, 255, 0.65)",
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleStartRecording}
+              aria-label={backendNotice}
+              title={backendNotice}
+              className="relative z-10 flex h-full w-full cursor-pointer items-center justify-center rounded-full text-neutral-900 outline-none focus-visible:ring-2 focus-visible:ring-neutral-900/40"
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="9" y="2.8" width="6" height="11.2" rx="3" fill="currentColor" stroke="none" />
+                <path d="M5.5 10.8a6.5 6.5 0 0 0 13 0" />
+                <path d="M12 17.5v3.5" />
+                <path d="M8.8 21h6.4" />
+              </svg>
+              {(!backendHealth.reachable || backendHealth.modelStatus === "loading") && (
+                <span
+                  aria-hidden="true"
+                  className={`absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full ${
+                    !backendHealth.reachable
+                      ? "bg-rose-500"
+                      : "animate-pulse bg-amber-500"
+                  }`}
+                />
+              )}
+            </button>
+          </GlassSurface>
+        </div>
+      ) : (
+        <GlassSurface
+          width={pillWidth}
+          height={pillHeight}
+          borderRadius={pillRadius}
+          borderWidth={0.07}
+          brightness={50}
+          opacity={0.93}
+          blur={11}
+          displace={0.5}
+          backgroundOpacity={0.22}
+          saturation={1.2}
+          distortionScale={-180}
+          redOffset={0}
+          greenOffset={10}
+          blueOffset={20}
+          data-tauri-drag-region
+          role="region"
+          aria-label="NOVA voice pill"
+          className="max-w-[calc(100vw-24px)] cursor-grab transition-[width,height] duration-200 ease-out active:cursor-grabbing"
+        >
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-[inherit]"
+            style={{
+              background: "rgba(255, 255, 255, 0.5)",
+              border: "1px solid rgba(255, 255, 255, 0.65)",
+            }}
+          />
+          <div
+            data-tauri-drag-region
+            className="relative z-10 flex h-full w-full items-center justify-between gap-2.5"
+          >
+            <button
+              type="button"
+              onClick={handleDismiss}
+              onMouseDown={stopDrag}
+              onPointerDown={stopDrag}
+              aria-label={isRecording ? "Cancel recording" : "Close voice pill"}
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-neutral-950 text-white shadow-sm transition-transform duration-150 hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900/50"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+
+            {isSuccess ? (
+              <div
+                onMouseDown={stopDrag}
+                onPointerDown={stopDrag}
+                className="max-h-[42px] min-w-0 flex-1 cursor-text select-text overflow-y-auto px-1 text-[12.5px] leading-[1.3] font-medium text-neutral-900"
+                title={state.transcript || "No speech detected"}
+              >
+                {state.transcript || "No speech detected."}
+              </div>
+            ) : isError ? (
+              <p
+                data-tauri-drag-region
+                className="pointer-events-none line-clamp-2 min-w-0 flex-1 px-1 text-[11.5px] leading-[1.25] font-medium text-rose-700"
+                title={state.errorMessage}
+              >
+                {state.errorMessage}
+              </p>
+            ) : (
+              <div
+                data-tauri-drag-region
+                aria-hidden="true"
+                className="pointer-events-none flex min-w-0 flex-1 items-center justify-center"
+                style={{ height: "28px", gap: "5px" }}
+              >
+                {COMPACT_WAVE_PROFILE.map(({ index, shape }, barIdx) => {
+                  const sourceLevel = isRecording
+                    ? audioLevels[index] ?? 0.14
+                    : IDLE_WAVEFORM_LEVELS[index] ?? 0.25;
+                  const baseRest = 0.12 + shape * 0.22;
+                  const scaleY = isRecording
+                    ? Math.min(1, Math.max(0.12, baseRest + shape * sourceLevel * 0.72))
+                    : Math.min(1, Math.max(0.12, baseRest + (isStarting || isProcessing ? 0.1 : 0.18)));
+
+                  return (
+                    <span
+                      key={barIdx}
+                      className={`shrink-0 rounded-full transition-transform duration-75 ease-out ${
+                        isStarting || isProcessing ? "animate-pulse opacity-65" : ""
+                      }`}
+                      style={{
+                        display: "block",
+                        width: "3px",
+                        height: "26px",
+                        backgroundColor: "rgba(17, 24, 39, 0.88)",
+                        transformOrigin: "center",
+                        transform: `scaleY(${scaleY.toFixed(3)})`,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleSendAction}
+              onMouseDown={stopDrag}
+              onPointerDown={stopDrag}
+              disabled={!canSendAction}
+              aria-label={
+                isRecording
+                  ? "Stop and transcribe"
+                  : isError && hasRetryBlob
+                    ? "Retry transcription"
+                    : isSuccess
+                      ? "Record again"
+                      : isStarting
+                        ? "Starting microphone"
+                        : "Transcribing audio"
+              }
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/60 bg-white/55 text-neutral-900 shadow-sm transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900/40 ${
+                canSendAction
+                  ? "cursor-pointer hover:scale-105 hover:bg-white/75 active:scale-95"
+                  : "cursor-default opacity-60"
+              }`}
+            >
+              {isStarting || isProcessing ? (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                  className="animate-spin"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="8"
+                    stroke="currentColor"
+                    strokeOpacity="0.25"
+                    strokeWidth="2.4"
+                  />
+                  <path
+                    d="M20 12a8 8 0 0 0-8-8"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              ) : isSuccess ? (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.1"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="9" y="2.8" width="6" height="11.2" rx="3" fill="currentColor" stroke="none" />
+                  <path d="M5.5 10.8a6.5 6.5 0 0 0 13 0" />
+                  <path d="M12 17.5v3.5" />
+                  <path d="M8.8 21h6.4" />
+                </svg>
+              ) : isError && hasRetryBlob ? (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <path d="M21 3v6h-6" />
+                </svg>
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 19V5" />
+                  <path d="m6.5 10.5 5.5-5.5 5.5 5.5" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </GlassSurface>
+      )}
     </main>
   );
 }

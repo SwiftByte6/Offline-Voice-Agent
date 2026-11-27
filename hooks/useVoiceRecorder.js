@@ -19,7 +19,7 @@ const PREFERRED_MIME_TYPES = [
   "audio/mp4",
 ];
 
-const METER_FRAME_INTERVAL_MS = 40;
+const METER_FRAME_INTERVAL_MS = 24;
 const MIC_REQUEST_TIMEOUT_MS = 10000;
 
 function selectSupportedMimeType() {
@@ -192,28 +192,54 @@ export function useVoiceRecorder({ onUnexpectedError } = {}) {
     if (!analyser) return;
 
     const frequencyData = new Uint8Array(analyser.frequencyBinCount);
-    const usableBins = Math.min(frequencyData.length, 48);
+    const timeData = new Uint8Array(analyser.fftSize);
+    const speechMaxBin = Math.min(frequencyData.length - 1, 24);
+    const halfBars = WAVEFORM_BAR_COUNT / 2;
+    let smoothedRms = 0;
+    let adaptivePeak = 0.08;
 
     const tick = (timestamp) => {
       if (!analyserRef.current) return;
 
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+
       if (timestamp - lastMeterUpdateRef.current >= METER_FRAME_INTERVAL_MS) {
         lastMeterUpdateRef.current = timestamp;
+        analyser.getByteTimeDomainData(timeData);
         analyser.getByteFrequencyData(frequencyData);
+
+        let sumSquares = 0;
+        for (let i = 0; i < timeData.length; i += 1) {
+          const normalized = (timeData[i] - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+        const rawRms = Math.sqrt(sumSquares / timeData.length);
+        const gatedRms = Math.max(0, rawRms - 0.003);
+        adaptivePeak = Math.max(0.035, Math.min(0.28, Math.max(adaptivePeak * 0.992, gatedRms * 1.15)));
+        const instantEnvelope = Math.min(1, Math.pow(gatedRms / adaptivePeak, 0.72));
+        smoothedRms =
+          instantEnvelope > smoothedRms
+            ? smoothedRms * 0.2 + instantEnvelope * 0.8
+            : smoothedRms * 0.62 + instantEnvelope * 0.38;
 
         const nextLevels = new Array(WAVEFORM_BAR_COUNT);
         for (let i = 0; i < WAVEFORM_BAR_COUNT; i += 1) {
-          const mirroredIdx =
-            i < WAVEFORM_BAR_COUNT / 2 ? i : WAVEFORM_BAR_COUNT - 1 - i;
+          const distFromCenter = Math.abs(i - (halfBars - 0.5)) / halfBars;
           const binIndex = Math.min(
-            usableBins - 1,
-            Math.floor(
-              (mirroredIdx / (WAVEFORM_BAR_COUNT / 2)) * usableBins * 0.75
-            ) + 1
+            speechMaxBin,
+            Math.max(1, Math.round(1 + distFromCenter * (speechMaxBin - 1)))
           );
-          const raw = frequencyData[binIndex] / 255;
-          const shaped = Math.min(1, Math.max(0.12, Math.pow(raw, 0.78) * 1.15));
-          nextLevels[i] = Number(shaped.toFixed(3));
+          const rawFreq = frequencyData[binIndex] / 255;
+          const gatedFreq = Math.max(0, rawFreq - 0.03) / 0.97;
+          const freqEnergy = Math.min(1, Math.pow(gatedFreq, 0.7) * 1.25);
+          const combined = Math.min(
+            1,
+            Math.max(0.12, smoothedRms * 0.68 + freqEnergy * 0.45)
+          );
+          nextLevels[i] = Number(combined.toFixed(3));
         }
 
         setAudioLevels(nextLevels);
@@ -266,8 +292,8 @@ export function useVoiceRecorder({ onUnexpectedError } = {}) {
           }
           const source = audioContext.createMediaStreamSource(stream);
           const analyser = audioContext.createAnalyser();
-          analyser.fftSize = 128;
-          analyser.smoothingTimeConstant = 0.72;
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.45;
           source.connect(analyser);
 
           audioContextRef.current = audioContext;
