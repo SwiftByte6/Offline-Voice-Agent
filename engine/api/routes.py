@@ -10,12 +10,12 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 import cv2
 import numpy as np
 
-from engine.speech.whisper_service import (
+from engine.speech.qwen_asr_service import (
     InvalidAudioError,
     ModelLoadingError,
     ModelUnavailableError,
     TranscriptionError,
-    WhisperService,
+    QwenASRService,
 )
 from engine.vision.service import (
     capture_screen,
@@ -100,31 +100,31 @@ async def _write_temp_audio(file: UploadFile, max_bytes: int) -> Path:
 
 @router.get("/health")
 async def get_health(request: Request) -> dict:
-    whisper_service: WhisperService = request.app.state.whisper_service
+    qwen_asr_service: QwenASRService = request.app.state.qwen_asr_service
     return {
         "status": "ok",
-        "model_status": whisper_service.status,
-        "model": whisper_service.config.model_name,
-        "ready": whisper_service.ready,
-        "error": whisper_service.error,
+        "model_status": qwen_asr_service.status,
+        "model": qwen_asr_service.config.model_name,
+        "ready": qwen_asr_service.ready,
+        "error": qwen_asr_service.error,
     }
 
 
 @router.post("/api/transcribe")
 async def transcribe_audio(request: Request, file: UploadFile = File(...)) -> dict:
-    whisper_service: WhisperService = request.app.state.whisper_service
+    qwen_asr_service: QwenASRService = request.app.state.qwen_asr_service
     transcription_lock: asyncio.Lock = request.app.state.transcription_lock
     max_upload_bytes: int = request.app.state.config.max_upload_bytes
 
-    if whisper_service.status == "loading":
+    if qwen_asr_service.status == "loading":
         raise HTTPException(
             status_code=503,
-            detail="Whisper model is still loading. Please try again shortly.",
+            detail="Qwen3-ASR model is still loading. Please try again shortly.",
         )
-    if not whisper_service.ready:
+    if not qwen_asr_service.ready:
         raise HTTPException(
             status_code=503,
-            detail=whisper_service.error or "Whisper model is unavailable.",
+            detail=qwen_asr_service.error or "Qwen3-ASR model is unavailable.",
         )
 
     if transcription_lock.locked():
@@ -139,7 +139,7 @@ async def transcribe_audio(request: Request, file: UploadFile = File(...)) -> di
     try:
         async with transcription_lock:
             temp_path = await _write_temp_audio(file, max_upload_bytes)
-            result = await asyncio.to_thread(whisper_service.transcribe_file, temp_path)
+            result = await asyncio.to_thread(qwen_asr_service.transcribe_file, temp_path)
 
         return {
             "success": True,
