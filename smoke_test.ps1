@@ -36,4 +36,11 @@ Test-Endpoint "act move" {
     if (-not $j.success) { throw "move failed: $($j.message)" }
 }
 
+Test-Endpoint "voice-act dry run" {
+    $body = '{"command":"read screen","execute":false}'
+    $r = Invoke-WebRequest "$base/api/voice-act" -Method POST -ContentType "application/json" -Body $body -UseBasicParsing
+    $j = $r.Content | ConvertFrom-Json
+    if (-not $j.success -or $j.action -ne "read_screen") { throw "voice-act dry run failed: $($j.message)" }
+}
+
 Write-Host "All smoke tests passed." -ForegroundColor Cyan

@@ -17,6 +17,7 @@ from engine.speech.qwen_asr_service import (
     TranscriptionError,
     QwenASRService,
 )
+from engine.vision.agent_router import route_voice_command
 from engine.vision.service import (
     capture_screen,
     execute_action,
@@ -101,11 +102,13 @@ async def _write_temp_audio(file: UploadFile, max_bytes: int) -> Path:
 @router.get("/health")
 async def get_health(request: Request) -> dict:
     qwen_asr_service: QwenASRService = request.app.state.qwen_asr_service
+    gemini_cfg = request.app.state.config.gemini
     return {
         "status": "ok",
         "model_status": qwen_asr_service.status,
         "model": qwen_asr_service.config.model_name,
         "ready": qwen_asr_service.ready,
+        "gemini_configured": bool(gemini_cfg.api_key),
         "error": qwen_asr_service.error,
     }
 
@@ -211,3 +214,23 @@ async def act(request: Request) -> dict:
             pass
 
     return execute_action(action)
+
+
+@router.post("/api/voice-act")
+async def voice_act(request: Request) -> dict:
+    """Parse a transcribed voice command, ground it via UIA/OCR, and execute or dry-run."""
+    try:
+        payload = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object.")
+
+    command = str(payload.get("command") or "").strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="Missing 'command' text.")
+
+    execute = bool(payload.get("execute", True))
+    gemini_cfg = request.app.state.config.gemini
+    return await asyncio.to_thread(route_voice_command, command, execute, gemini_cfg)

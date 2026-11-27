@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { IDLE_WAVEFORM_LEVELS, useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { checkBackendHealth, transcribeAudioBlob } from "@/lib/speechApi";
+import {
+  checkBackendHealth,
+  executeVoiceCommand,
+  transcribeAudioBlob,
+} from "@/lib/speechApi";
 import {
   PILL_WINDOW_SIZE,
   enforceFloatingWindowBehavior,
@@ -14,6 +18,7 @@ const INITIAL_STATE = {
   status: "idle", // "idle" | "starting" | "recording" | "processing" | "success" | "error"
   transcript: "",
   transcriptMeta: null,
+  actionResult: null,
   errorMessage: "",
 };
 
@@ -38,6 +43,7 @@ function voiceReducer(state, action) {
         status: "starting",
         transcript: "",
         transcriptMeta: null,
+        actionResult: null,
         errorMessage: "",
       };
     case "START_RECORDING":
@@ -61,6 +67,7 @@ function voiceReducer(state, action) {
           language: action.language,
           duration: action.duration,
         },
+        actionResult: action.actionResult || null,
         errorMessage: "",
       };
     case "SET_ERROR":
@@ -185,11 +192,29 @@ export default function FloatingWindow() {
         modelStatus: "ready",
       }));
 
+      let actionResult = null;
+      if (result.text) {
+        try {
+          actionResult = await executeVoiceCommand(result.text, {
+            signal: controller.signal,
+          });
+        } catch (actionError) {
+          if (actionError?.name === "AbortError") return;
+          actionResult = {
+            success: false,
+            action: "error",
+            executed: false,
+            message: actionError?.message || "Voice action failed.",
+          };
+        }
+      }
+
       dispatch({
         type: "TRANSCRIBE_SUCCESS",
         text: result.text,
         language: result.language,
         duration: result.duration,
+        actionResult,
       });
     } catch (error) {
       if (error?.name === "AbortError") return;
@@ -434,10 +459,36 @@ export default function FloatingWindow() {
               <div
                 onMouseDown={stopDrag}
                 onPointerDown={stopDrag}
-                className="max-h-[42px] min-w-0 flex-1 cursor-text select-text overflow-y-auto px-1 text-[12.5px] leading-[1.3] font-medium text-neutral-900"
-                title={state.transcript || "No speech detected"}
+                className="flex max-h-[44px] min-w-0 flex-1 cursor-text select-text flex-col justify-center overflow-y-auto px-1"
+                title={
+                  state.actionResult?.screenText ||
+                  state.actionResult?.message ||
+                  state.transcript ||
+                  "No speech detected"
+                }
               >
-                {state.transcript || "No speech detected."}
+                {state.actionResult &&
+                  state.actionResult.action !== "dictate" && (
+                    <span
+                      className={`truncate text-[10px] font-semibold tracking-tight ${
+                        state.actionResult.success
+                          ? "text-emerald-800"
+                          : "text-rose-700"
+                      }`}
+                    >
+                      {state.actionResult.matchedBy === "gemini"
+                        ? state.actionResult.message
+                        : state.actionResult.executed && state.actionResult.target
+                          ? `${state.actionResult.action}: ${state.actionResult.target} (${state.actionResult.matchedBy})`
+                          : state.actionResult.message}
+                    </span>
+                  )}
+                <span className="text-[12.5px] leading-[1.25] font-medium text-neutral-900">
+                  {state.actionResult?.screenText &&
+                  state.actionResult?.matchedBy === "gemini"
+                    ? state.actionResult.screenText
+                    : state.transcript || "No speech detected."}
+                </span>
               </div>
             ) : isError ? (
               <p

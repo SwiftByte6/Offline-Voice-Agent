@@ -5,7 +5,27 @@ import os
 from pathlib import Path
 
 ENGINE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = ENGINE_DIR.parent
 DEFAULT_CACHE_DIR = ENGINE_DIR / ".cache" / "qwen-asr"
+
+
+def _load_dotenv() -> None:
+    """Load key=value pairs from .env files without overriding existing env vars."""
+    for env_path in (REPO_ROOT / ".env", ENGINE_DIR / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip("\"'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            continue
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",
@@ -41,15 +61,26 @@ class QwenASRConfig:
 
 
 @dataclass(frozen=True)
+class GeminiConfig:
+    api_key: str | None
+    model: str
+    timeout_seconds: float
+    max_steps: int
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     host: str
     port: int
     max_upload_bytes: int
     cors_origins: tuple[str, ...]
     qwen_asr: QwenASRConfig
+    gemini: GeminiConfig
 
 
 def load_config() -> ServerConfig:
+    _load_dotenv()
+
     raw_language = os.getenv("NOVA_QWEN_ASR_LANGUAGE", "").strip()
     language = raw_language if raw_language else None
 
@@ -72,10 +103,23 @@ def load_config() -> ServerConfig:
         max_new_tokens=max(1, int(os.getenv("NOVA_QWEN_ASR_MAX_NEW_TOKENS", "512"))),
     )
 
+    gemini_key = (
+        os.getenv("NOVA_GEMINI_API_KEY", "").strip()
+        or os.getenv("GEMINI_API_KEY", "").strip()
+        or None
+    )
+    gemini_cfg = GeminiConfig(
+        api_key=gemini_key,
+        model=os.getenv("NOVA_GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
+        timeout_seconds=max(5.0, float(os.getenv("NOVA_GEMINI_TIMEOUT", "25"))),
+        max_steps=max(1, min(10, int(os.getenv("NOVA_GEMINI_MAX_STEPS", "6")))),
+    )
+
     return ServerConfig(
         host=os.getenv("NOVA_ENGINE_HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=int(os.getenv("NOVA_ENGINE_PORT", "8000")),
         max_upload_bytes=max(1, max_upload_mb) * 1024 * 1024,
         cors_origins=_parse_origins(os.getenv("NOVA_CORS_ORIGINS")),
         qwen_asr=qwen_asr_cfg,
+        gemini=gemini_cfg,
     )
