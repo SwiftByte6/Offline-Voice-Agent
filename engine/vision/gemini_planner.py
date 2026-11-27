@@ -17,6 +17,7 @@ from engine.vision.uia_service import _boxes_overlap, collect_uia_elements, get_
 logger = logging.getLogger("nova.gemini_planner")
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+FALLBACK_MODELS = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
 
 SYSTEM_PROMPT = """You are NOVA, a Windows desktop voice agent observing the user's live screen.
 Given the current screenshot, a list of detected Windows UI Automation (UIA) controls, the user's spoken request, and any steps already executed, return ONLY a valid JSON object for the NEXT single step (or "done" when complete).
@@ -115,22 +116,36 @@ def _call_gemini_step(
         },
     }
 
-    url = f"{GEMINI_API_BASE}/{config.model}:generateContent"
-    with httpx.Client(timeout=config.timeout_seconds) as client:
-        response = client.post(
-            url,
-            headers={"x-goog-api-key": config.api_key, "Content-Type": "application/json"},
-            json=body,
-        )
+    candidate_models = [config.model] + [
+        m for m in FALLBACK_MODELS if m != config.model
+    ]
 
-    if response.status_code >= 400:
-        detail = response.text
-        try:
-            err_json = response.json()
-            detail = err_json.get("error", {}).get("message") or detail
-        except Exception:  # noqa: BLE001
-            pass
-        raise RuntimeError(f"Gemini API error ({response.status_code}): {detail}")
+    response: httpx.Response | None = None
+    last_detail = ""
+    last_status = 0
+
+    with httpx.Client(timeout=config.timeout_seconds) as client:
+        for model_name in candidate_models:
+            url = f"{GEMINI_API_BASE}/{model_name}:generateContent"
+            response = client.post(
+                url,
+                headers={"x-goog-api-key": config.api_key, "Content-Type": "application/json"},
+                json=body,
+            )
+            if response.status_code < 400:
+                break
+            last_status = response.status_code
+            last_detail = response.text
+            try:
+                err_json = response.json()
+                last_detail = err_json.get("error", {}).get("message") or last_detail
+            except Exception:  # noqa: BLE001
+                pass
+            if response.status_code not in {429, 503}:
+                raise RuntimeError(f"Gemini API error ({last_status}): {last_detail}")
+
+    if response is None or response.status_code >= 400:
+        raise RuntimeError(f"Gemini API error ({last_status}): {last_detail}")
 
     data = response.json()
     candidates = data.get("candidates") or []
