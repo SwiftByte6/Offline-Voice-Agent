@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from engine.api.routes import router
 from engine.config import load_config
-from engine.speech.whisper_service import WhisperService
+from engine.speech.qwen_asr_service import QwenASRService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,12 +25,12 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = app.state.config
-    whisper_service = WhisperService(config.whisper)
-    app.state.whisper_service = whisper_service
+    qwen_asr_service = QwenASRService(config.qwen_asr)
+    app.state.qwen_asr_service = qwen_asr_service
     app.state.transcription_lock = asyncio.Lock()
 
     # Load model in a background worker thread so /health responds immediately during startup.
-    load_task = asyncio.create_task(asyncio.to_thread(whisper_service.load_model))
+    load_task = asyncio.create_task(asyncio.to_thread(qwen_asr_service.load_model))
 
     try:
         yield

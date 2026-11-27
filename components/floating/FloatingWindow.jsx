@@ -75,7 +75,7 @@ function voiceReducer(state, action) {
 
 /**
  * Top-level floating voice overlay controller.
- * Coordinates microphone capture, FastAPI Faster-Whisper transcription, and Tauri window setup.
+ * Coordinates microphone capture, FastAPI Qwen3-ASR transcription, and Tauri window setup.
  */
 export default function FloatingWindow() {
   const [state, dispatch] = useReducer(voiceReducer, INITIAL_STATE);

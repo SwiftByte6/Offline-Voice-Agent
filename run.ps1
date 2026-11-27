@@ -12,29 +12,38 @@ if (-not (Test-Path (Join-Path $root "node_modules"))) {
     pnpm install
 }
 
-# 2) Python virtual environment + backend dependencies
+# 2) Python virtual environment + Qwen3-ASR backend dependencies
 $venvPython = Join-Path $root "engine\.venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
     Write-Host "Creating Python virtual environment..."
     python -m venv (Join-Path $root "engine\.venv")
-    & (Join-Path $root "engine\.venv\Scripts\pip.exe") install -r (Join-Path $root "engine\requirements.txt")
 }
+Write-Host "Installing or updating Qwen3-ASR backend dependencies..."
+& (Join-Path $root "engine\.venv\Scripts\pip.exe") install -r (Join-Path $root "engine\requirements.txt")
 
 # 3) Start the speech backend if it isn't already running
 $backendReady = $false
 try {
     $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
-    $backendReady = $true
-    Write-Host "Speech backend already running."
+    $health = $resp.Content | ConvertFrom-Json
+    if ($health.model -like "*Qwen3-ASR*") {
+        $backendReady = $true
+        Write-Host "Qwen3-ASR speech backend already running."
+    } else {
+        throw "A non-Qwen3-ASR speech backend is using port 8000. Close it, then run this launcher again."
+    }
 } catch {
-    Write-Host "Starting speech backend (FastAPI + Faster-Whisper)..."
+    if ($_.Exception.Message -like "A non-Qwen3-ASR*") {
+        throw
+    }
+    Write-Host "Starting speech backend (FastAPI + Qwen3-ASR-0.6B)..."
     Start-Process -FilePath $venvPython `
         -ArgumentList "-m", "uvicorn", "engine.main:app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log" `
         -WorkingDirectory $root -WindowStyle Minimized
 }
 
-# 4) Wait until the Whisper model is ready
-Write-Host "Waiting for Whisper model 'base' to be ready..."
+# 4) Wait until Qwen3-ASR is ready
+Write-Host "Waiting for Qwen3-ASR-0.6B to be ready..."
 for ($i = 0; $i -lt 120; $i++) {
     try {
         $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
