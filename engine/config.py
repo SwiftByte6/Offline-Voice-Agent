@@ -6,6 +6,7 @@ from pathlib import Path
 
 ENGINE_DIR = Path(__file__).resolve().parent
 DEFAULT_CACHE_DIR = ENGINE_DIR / ".cache" / "qwen-asr"
+DEFAULT_LLM_CACHE_DIR = ENGINE_DIR / ".cache" / "lfm3"
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",
@@ -41,12 +42,24 @@ class QwenASRConfig:
 
 
 @dataclass(frozen=True)
+class LLMConfig:
+    model_repo: str
+    model_file: str
+    cache_dir: Path
+    context_tokens: int
+    gpu_layers: int
+    threads: int | None
+    local_files_only: bool
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     host: str
     port: int
     max_upload_bytes: int
     cors_origins: tuple[str, ...]
     qwen_asr: QwenASRConfig
+    llm: LLMConfig
 
 
 def load_config() -> ServerConfig:
@@ -72,10 +85,27 @@ def load_config() -> ServerConfig:
         max_new_tokens=max(1, int(os.getenv("NOVA_QWEN_ASR_MAX_NEW_TOKENS", "512"))),
     )
 
+    llm_cache_dir = Path(
+        os.getenv("NOVA_LLM_CACHE_DIR", str(DEFAULT_LLM_CACHE_DIR))
+    ).expanduser().resolve()
+    raw_threads = os.getenv("NOVA_LLM_THREADS", "").strip()
+    llm_cfg = LLMConfig(
+        model_repo=os.getenv("NOVA_LLM_MODEL_REPO", "LiquidAI/LFM3-1.7B-GGUF").strip()
+        or "LiquidAI/LFM3-1.7B-GGUF",
+        model_file=os.getenv("NOVA_LLM_MODEL_FILE", "LFM3-1.7B-Q4_K_M.gguf").strip()
+        or "LFM3-1.7B-Q4_K_M.gguf",
+        cache_dir=llm_cache_dir,
+        context_tokens=max(512, int(os.getenv("NOVA_LLM_CONTEXT_TOKENS", "4096"))),
+        gpu_layers=max(0, int(os.getenv("NOVA_LLM_GPU_LAYERS", "0"))),
+        threads=max(1, int(raw_threads)) if raw_threads else None,
+        local_files_only=_parse_bool(os.getenv("NOVA_LLM_OFFLINE_ONLY"), False),
+    )
+
     return ServerConfig(
         host=os.getenv("NOVA_ENGINE_HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=int(os.getenv("NOVA_ENGINE_PORT", "8000")),
         max_upload_bytes=max(1, max_upload_mb) * 1024 * 1024,
         cors_origins=_parse_origins(os.getenv("NOVA_CORS_ORIGINS")),
         qwen_asr=qwen_asr_cfg,
+        llm=llm_cfg,
     )

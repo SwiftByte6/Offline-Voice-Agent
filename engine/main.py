@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from engine.api.routes import router
 from engine.config import load_config
+from engine.agent.desktop_agent import DesktopAgent
+from engine.llm.lfm_service import LFMService
 from engine.speech.qwen_asr_service import QwenASRService
 
 logging.basicConfig(
@@ -26,21 +28,29 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     config = app.state.config
     qwen_asr_service = QwenASRService(config.qwen_asr)
+    lfm_service = LFMService(config.llm)
     app.state.qwen_asr_service = qwen_asr_service
+    app.state.lfm_service = lfm_service
+    app.state.desktop_agent = DesktopAgent(lfm_service)
     app.state.transcription_lock = asyncio.Lock()
+    app.state.agent_lock = asyncio.Lock()
 
     # Load model in a background worker thread so /health responds immediately during startup.
-    load_task = asyncio.create_task(asyncio.to_thread(qwen_asr_service.load_model))
+    load_tasks = [
+        asyncio.create_task(asyncio.to_thread(qwen_asr_service.load_model)),
+        asyncio.create_task(asyncio.to_thread(lfm_service.load_model)),
+    ]
 
     try:
         yield
     finally:
-        if not load_task.done():
-            load_task.cancel()
-            try:
-                await load_task
-            except asyncio.CancelledError:
-                pass
+        for load_task in load_tasks:
+            if not load_task.done():
+                load_task.cancel()
+                try:
+                    await load_task
+                except asyncio.CancelledError:
+                    pass
 
 
 def create_app() -> FastAPI:

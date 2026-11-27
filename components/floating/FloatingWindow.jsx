@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { IDLE_WAVEFORM_LEVELS, useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { checkBackendHealth, transcribeAudioBlob } from "@/lib/speechApi";
+import { checkBackendHealth, confirmAgentAction, transcribeAudioBlob } from "@/lib/speechApi";
 import {
   PILL_WINDOW_SIZE,
   enforceFloatingWindowBehavior,
@@ -14,6 +14,7 @@ const INITIAL_STATE = {
   status: "idle", // "idle" | "starting" | "recording" | "processing" | "success" | "error"
   transcript: "",
   transcriptMeta: null,
+  agentResult: null,
   errorMessage: "",
 };
 
@@ -38,6 +39,7 @@ function voiceReducer(state, action) {
         status: "starting",
         transcript: "",
         transcriptMeta: null,
+        agentResult: null,
         errorMessage: "",
       };
     case "START_RECORDING":
@@ -61,6 +63,7 @@ function voiceReducer(state, action) {
           language: action.language,
           duration: action.duration,
         },
+        agentResult: action.agent || null,
         errorMessage: "",
       };
     case "SET_ERROR":
@@ -185,11 +188,20 @@ export default function FloatingWindow() {
         modelStatus: "ready",
       }));
 
+      let agentResult = result.agent;
+      while (agentResult?.confirmation_required) {
+        const approved = window.confirm(
+          `${agentResult.confirmation_message}\n\nApprove this action?`
+        );
+        agentResult = await confirmAgentAction(agentResult.confirmation_id, approved);
+      }
+
       dispatch({
         type: "TRANSCRIBE_SUCCESS",
         text: result.text,
         language: result.language,
         duration: result.duration,
+        agent: agentResult,
       });
     } catch (error) {
       if (error?.name === "AbortError") return;
@@ -293,7 +305,7 @@ export default function FloatingWindow() {
   const backendNotice = !backendHealth.reachable
     ? "Speech engine offline"
     : backendHealth.modelStatus === "loading"
-      ? "Loading speech model..."
+      ? "Loading local models..."
       : "Start voice recording";
 
   const pillWidth = isSuccess || isError ? 308 : 224;
@@ -437,7 +449,15 @@ export default function FloatingWindow() {
                 className="max-h-[42px] min-w-0 flex-1 cursor-text select-text overflow-y-auto px-1 text-[12.5px] leading-[1.3] font-medium text-neutral-900"
                 title={state.transcript || "No speech detected"}
               >
-                {state.transcript || "No speech detected."}
+                <span>{state.transcript || "No speech detected."}</span>
+                {state.agentResult && (
+                  <span className="block text-[10.5px] font-normal text-neutral-600">
+                    {state.agentResult.summary || "Desktop task completed"}
+                    {state.agentResult.actions?.length
+                      ? ` · ${state.agentResult.actions.length} action${state.agentResult.actions.length === 1 ? "" : "s"}`
+                      : ""}
+                  </span>
+                )}
               </div>
             ) : isError ? (
               <p

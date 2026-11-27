@@ -6,6 +6,7 @@ import base64
 import io
 import logging
 import threading
+import time
 from typing import Any
 
 import cv2
@@ -106,7 +107,7 @@ def _scale_point(x: int, y: int, src_w: int, src_h: int) -> tuple[int, int]:
 
 def execute_action(action: dict[str, Any]) -> dict[str, Any]:
     """Execute a desktop action dict. Supported: click, double_click, right_click,
-    type, hotkey, scroll, move."""
+    type, hotkey, scroll, move, open, navigate_url."""
     kind = str(action.get("action", "")).lower().strip()
     try:
         if kind in {"click", "double_click", "right_click"}:
@@ -130,6 +131,28 @@ def execute_action(action: dict[str, Any]) -> dict[str, Any]:
             text = str(action.get("text", ""))
             pyautogui.write(text, interval=0.02)
             return {"success": True, "message": f"typed {len(text)} chars"}
+
+        if kind == "open":
+            target = str(action.get("target", "")).strip()
+            if not target:
+                return {"success": False, "message": "open requires a target"}
+            pyautogui.press("win")
+            time.sleep(0.4)
+            pyautogui.write(target, interval=0.02)
+            time.sleep(0.4)
+            pyautogui.press("enter")
+            return {"success": True, "message": f"opened {target!r} from Start"}
+
+        if kind == "navigate_url":
+            url = str(action.get("url", "")).strip()
+            if not url.startswith(("https://", "http://")):
+                return {"success": False, "message": "navigate_url requires an http or https URL"}
+            # Give a newly launched browser time to become the foreground window.
+            time.sleep(1.5)
+            pyautogui.hotkey("ctrl", "l")
+            pyautogui.write(url, interval=0.01)
+            pyautogui.press("enter")
+            return {"success": True, "message": f"navigated active browser to {url}"}
 
         if kind == "hotkey":
             keys = action.get("keys") or []

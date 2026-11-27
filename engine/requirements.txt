@@ -2,6 +2,14 @@ qwen-asr==0.0.6
 torch>=2.5.0
 av>=14.0.0
 numpy>=1.26.0
+huggingface-hub>=0.30.0
+# Windows wheels include dynamically selected CPU backends, avoiding unsupported AVX512 instructions.
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.4.8-cu128-win-20261122/llama_cpp_python-0.4.8%2Bcu128-cp310-cp310-win_amd64.whl ; platform_system == "Windows" and python_version == "3.10"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.4.8-cu128-win-20261122/llama_cpp_python-0.4.8%2Bcu128-cp311-cp311-win_amd64.whl ; platform_system == "Windows" and python_version == "3.11"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.4.8-cu128-win-20261122/llama_cpp_python-0.4.8%2Bcu128-cp312-cp312-win_amd64.whl ; platform_system == "Windows" and python_version == "3.12"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.4.8-cu128-win-20261122/llama_cpp_python-0.4.8%2Bcu128-cp313-cp313-win_amd64.whl ; platform_system == "Windows" and python_version == "3.13"
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.4.8-cu128-win-20261122/llama_cpp_python-0.4.8%2Bcu128-cp314-cp314-win_amd64.whl ; platform_system == "Windows" and python_version == "3.14"
+llama-cpp-python>=0.3.16 ; platform_system != "Windows"
 fastapi>=0.115.0
 uvicorn>=0.32.0
 python-multipart>=0.0.12

@@ -18,33 +18,36 @@ if (-not (Test-Path $venvPython)) {
     Write-Host "Creating Python virtual environment..."
     python -m venv (Join-Path $root "engine\.venv")
 }
-Write-Host "Installing or updating Qwen3-ASR backend dependencies..."
+Write-Host "Installing or updating local-agent backend dependencies..."
 & (Join-Path $root "engine\.venv\Scripts\pip.exe") install -r (Join-Path $root "engine\requirements.txt")
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend dependency installation failed. The agent was not started."
+}
 
 # 3) Start the speech backend if it isn't already running
 $backendReady = $false
 try {
     $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
     $health = $resp.Content | ConvertFrom-Json
-    if ($health.model -like "*Qwen3-ASR*") {
+    if ($health.agent_version -eq "desktop-agent-v6" -and $health.model -like "*Qwen3-ASR*" -and $health.llm_model -like "*LFM3*") {
         $backendReady = $true
-        Write-Host "Qwen3-ASR speech backend already running."
+        Write-Host "Qwen3-ASR and LFM3 local agent backend already running."
     } else {
-        throw "A non-Qwen3-ASR speech backend is using port 8000. Close it, then run this launcher again."
+        throw "An older or incompatible backend is using port 8000. Close it, then run this launcher again."
     }
 } catch {
-    if ($_.Exception.Message -like "A non-Qwen3-ASR*") {
+    if ($_.Exception.Message -like "An older or incompatible backend*") {
         throw
     }
-    Write-Host "Starting speech backend (FastAPI + Qwen3-ASR-0.6B)..."
+    Write-Host "Starting local agent backend (FastAPI + Qwen3-ASR + LFM3)..."
     Start-Process -FilePath $venvPython `
         -ArgumentList "-m", "uvicorn", "engine.main:app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log" `
-        -WorkingDirectory $root -WindowStyle Minimized
+        -WorkingDirectory $root -WindowStyle Normal
 }
 
-# 4) Wait until Qwen3-ASR is ready
-Write-Host "Waiting for Qwen3-ASR-0.6B to be ready..."
-for ($i = 0; $i -lt 120; $i++) {
+# 4) Wait until Qwen3-ASR and LFM3 are ready
+Write-Host "Waiting for Qwen3-ASR-0.6B and LFM3-1.7B to be ready..."
+for ($i = 0; $i -lt 180; $i++) {
     try {
         $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/health" -UseBasicParsing -TimeoutSec 2
         $json = $resp.Content | ConvertFrom-Json
