@@ -241,9 +241,31 @@ async def voice_status(request: Request) -> dict:
             llm_info["error"] = str(exc)
     return {
         "llm": llm_info,
+        "tts": {"available": pipeline.tts.available, "exe": pipeline.tts.exe or None, "model": pipeline.tts.model or None},
         "pending_approval": pipeline.pending_summary(),
         "recent_turns": len(pipeline.memory.recent_turns()),
     }
+
+
+@router.post("/api/voice/speak")
+async def voice_speak(request: Request) -> dict:
+    """Synthesize speech via Piper TTS (returns base64 WAV and optionally plays locally)."""
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+    if not isinstance(body, dict) or not body.get("text"):
+        raise HTTPException(status_code=400, detail="Missing 'text'.")
+    pipeline = request.app.state.pekka_pipeline
+    res = await pipeline.tts.speak(str(body["text"]), play_local=bool(body.get("play_local", False)))
+    return res.to_dict()
+
+
+@router.post("/api/voice/stop_speaking")
+async def voice_stop_speaking(request: Request) -> dict:
+    pipeline = request.app.state.pekka_pipeline
+    pipeline.tts.stop()
+    return {"stopped": True}
 
 
 @router.post("/api/voice/command")
@@ -258,6 +280,8 @@ async def voice_command(request: Request) -> dict:
     pipeline = request.app.state.pekka_pipeline
     result = await pipeline.run(
         transcript=str(body["transcript"]),
+        speak=bool(body.get("speak", False)),
+        play_local=bool(body.get("play_local", False)),
         approval=bool(body.get("approval", False)),
         require_wake_word=bool(body.get("require_wake_word", False)),
         wake_name=str(body.get("wake_name") or "P.E.K.K.A"),
@@ -269,6 +293,8 @@ async def voice_command(request: Request) -> dict:
 async def voice_agent(
     request: Request,
     file: UploadFile = File(...),
+    speak: bool = Form(False),
+    play_local: bool = Form(False),
     approval: bool = Form(False),
     require_wake_word: bool = Form(False),
     wake_name: str = Form("P.E.K.K.A"),
@@ -294,6 +320,8 @@ async def voice_agent(
             pipeline = request.app.state.pekka_pipeline
             result = await pipeline.run(
                 audio_path=temp_path,
+                speak=speak,
+                play_local=play_local,
                 approval=approval,
                 require_wake_word=require_wake_word,
                 wake_name=wake_name,
