@@ -22,6 +22,7 @@ from .intent import (
 from .local_llm import LocalLLM, LocalLLMUnavailable, make_local_llm
 from .memory import SessionMemory
 from .permissions import PermissionDecision, PermissionLayer
+from .piper_tts import PiperSpeechResult, PiperTTS
 from .tools import ToolExecutionError, ToolExecutor
 
 
@@ -32,6 +33,7 @@ class PekkaPipelineResult:
     permission: PermissionDecision
     tool_result: dict[str, Any] | None
     response_text: str
+    spoken: PiperSpeechResult | None
     require_wake_word: bool
     wake_triggered: bool
     errors: tuple[str, ...] = ()
@@ -54,6 +56,7 @@ class PekkaPipelineResult:
             },
             "tool_result": self.tool_result,
             "response_text": self.response_text,
+            "spoken": self.spoken.to_dict() if self.spoken else None,
             "require_wake_word": self.require_wake_word,
             "wake_triggered": self.wake_triggered,
             "errors": list(self.errors),
@@ -61,12 +64,13 @@ class PekkaPipelineResult:
 
 
 class PekkaPipeline:
-    """Offline voice-to-action pipeline with Jarvis-style local LLM, memory, and approval gate."""
+    """Offline voice-to-action pipeline with Jarvis-style local LLM, memory, approval gate, and Piper TTS."""
 
     def __init__(
         self,
         stt: Any,
         llm: LocalLLM | None | Any = ...,
+        tts: PiperTTS | None = None,
         permissions: PermissionLayer | None = None,
         tools: ToolExecutor | None = None,
         memory: SessionMemory | None = None,
@@ -74,6 +78,7 @@ class PekkaPipeline:
     ) -> None:
         self.stt = stt
         self.llm = make_local_llm() if llm is ... else llm
+        self.tts = tts or PiperTTS()
         self.permissions = permissions or PermissionLayer()
         self.tools = tools or ToolExecutor()
         self.memory = memory or SessionMemory()
@@ -100,6 +105,8 @@ class PekkaPipeline:
         *,
         audio_path: str | Path | None = None,
         transcript: str | None = None,
+        speak: bool = False,
+        play_local: bool = False,
         approval: bool = False,
         require_wake_word: bool = False,
         wake_name: str | None = None,
@@ -130,6 +137,7 @@ class PekkaPipeline:
                 permission=PermissionDecision(True, False, False, "no wake word"),
                 tool_result=None,
                 response_text="",
+                spoken=None,
                 require_wake_word=require_wake_word,
                 wake_triggered=False,
                 errors=tuple(errors + ["wake word not triggered"]),
@@ -151,12 +159,14 @@ class PekkaPipeline:
                 response_text = _response_from_tool(tool_result) or pending.response_text or "Confirmed and executed."
                 self.memory.add_turn("user", cleaned)
                 self.memory.add_turn("assistant", response_text, tool=pending.tool_name)
-                return PekkaPipelineResult(
-                    transcript=cleaned,
+                return await self._finish(
+                    cleaned=cleaned,
                     intent=pending,
                     permission=permission,
                     tool_result=tool_result,
                     response_text=response_text,
+                    speak=speak,
+                    play_local=play_local,
                     require_wake_word=require_wake_word,
                     wake_triggered=wake_triggered,
                     errors=tuple(errors),
@@ -165,12 +175,14 @@ class PekkaPipeline:
                 self._pending_intent = None
                 self.memory.add_turn("user", cleaned)
                 self.memory.add_turn("assistant", "Cancelled.")
-                return PekkaPipelineResult(
-                    transcript=cleaned,
+                return await self._finish(
+                    cleaned=cleaned,
                     intent=noop_intent(cleaned, "Cancelled."),
                     permission=PermissionDecision(True, False, False, "cancelled by user"),
                     tool_result=None,
                     response_text="Cancelled.",
+                    speak=speak,
+                    play_local=play_local,
                     require_wake_word=require_wake_word,
                     wake_triggered=wake_triggered,
                     errors=tuple(errors),
@@ -190,12 +202,14 @@ class PekkaPipeline:
         if permission.needs_approval and intent.tool is not None:
             self._pending_intent = intent
             prompt = f"Approval required for {permission.reason}. Say 'Yes, go ahead' to confirm or 'Cancel' to abort."
-            return PekkaPipelineResult(
-                transcript=cleaned,
+            return await self._finish(
+                cleaned=cleaned,
                 intent=intent,
                 permission=permission,
                 tool_result=None,
                 response_text=prompt,
+                speak=speak,
+                play_local=play_local,
                 require_wake_word=require_wake_word,
                 wake_triggered=wake_triggered,
                 errors=tuple(errors),
@@ -225,12 +239,14 @@ class PekkaPipeline:
                     if next_perm.needs_approval and next_intent.tool is not None:
                         self._pending_intent = next_intent
                         prompt = f"Approval required for {next_perm.reason}. Say 'Yes, go ahead' to confirm or 'Cancel' to abort."
-                        return PekkaPipelineResult(
-                            transcript=cleaned,
+                        return await self._finish(
+                            cleaned=cleaned,
                             intent=next_intent,
                             permission=next_perm,
                             tool_result=tool_result,
                             response_text=prompt,
+                            speak=speak,
+                            play_local=play_local,
                             require_wake_word=require_wake_word,
                             wake_triggered=wake_triggered,
                             errors=tuple(errors),
@@ -250,15 +266,46 @@ class PekkaPipeline:
         response_text = intent.response_text or _response_from_tool(tool_result) or cleaned
         self.memory.add_turn("user", cleaned)
         self.memory.add_turn("assistant", response_text, tool=intent.tool_name)
+        return await self._finish(
+            cleaned=cleaned,
+            intent=intent,
+            permission=permission,
+            tool_result=tool_result,
+            response_text=response_text,
+            speak=speak,
+            play_local=play_local,
+            require_wake_word=require_wake_word,
+            wake_triggered=wake_triggered,
+            errors=tuple(errors),
+        )
+
+    async def _finish(
+        self,
+        *,
+        cleaned: str,
+        intent: Intent,
+        permission: PermissionDecision,
+        tool_result: dict[str, Any] | None,
+        response_text: str,
+        speak: bool,
+        play_local: bool,
+        require_wake_word: bool,
+        wake_triggered: bool,
+        errors: tuple[str, ...],
+    ) -> PekkaPipelineResult:
+        spoken: PiperSpeechResult | None = None
+        if speak and response_text:
+            spoken = await self.tts.speak(response_text, play_local=play_local)
         return PekkaPipelineResult(
             transcript=cleaned,
             intent=intent,
             permission=permission,
             tool_result=tool_result,
             response_text=response_text,
+            spoken=spoken,
             require_wake_word=require_wake_word,
             wake_triggered=wake_triggered,
-            errors=tuple(errors),
+            errors=errors,
         )
 
 
