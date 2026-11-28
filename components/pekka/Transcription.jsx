@@ -3,11 +3,14 @@
 import { motion } from "motion/react";
 
 /**
- * Live bottom-strip transcription display.
- * Clips cleanly within available width and pins newest words into view
- * without ever overlapping PEKKA's eyes.
+ * Live bottom-strip transcription / listening status display.
+ * Clips cleanly within available width without overlapping PEKKA's eyes.
  */
-export default function Transcription({ text, reducedMotion = false }) {
+export default function Transcription({
+  text,
+  placeholder = "Listening...",
+  reducedMotion = false,
+}) {
   const hasText = Boolean(text && text.trim());
 
   return (
@@ -20,11 +23,11 @@ export default function Transcription({ text, reducedMotion = false }) {
         hasText ? "pekka-transcript-mask" : ""
       }`}
       style={{ color: "var(--pekka-strip-text-color)" }}
-      title={text || "Listening"}
+      title={text || placeholder}
     >
       <div className="flex w-full justify-end">
         <span className="inline-block min-w-full text-left">
-          {hasText ? `.....${text}` : "Listening..."}
+          {hasText ? text : placeholder}
         </span>
       </div>
     </motion.div>

@@ -1,27 +1,22 @@
 "use client";
 
-import { useSimulatedAudio } from "@/hooks/useSimulatedAudio";
+import { sampleAudioLevels } from "@/hooks/useVoiceRecorder";
 
 const BAR_HEIGHTS_PX = [9, 13, 16, 13, 9];
+const REST_LEVELS = [0.22, 0.34, 0.48, 0.38, 0.26];
 
 /**
  * Minimal restrained vertical-bar audio waveform for the bottom-left strip.
- * Uses shared `levels` when provided or falls back to `useSimulatedAudio`.
+ * Uses real microphone `levels` / `audioLevels` when active, or static rest bars when idle.
  */
 export default function AudioWaveform({
   active,
   levels = null,
   audioLevels = null,
-  reducedMotion = false,
 }) {
-  const fallbackLevels = useSimulatedAudio({
-    active: active && !levels,
-    barCount: BAR_HEIGHTS_PX.length,
-    externalLevels: audioLevels,
-    reducedMotion,
-  });
-
-  const activeLevels = levels ?? fallbackLevels;
+  const activeLevels = !active
+    ? REST_LEVELS
+    : levels ?? sampleAudioLevels(audioLevels, BAR_HEIGHTS_PX.length, REST_LEVELS);
 
   return (
     <div

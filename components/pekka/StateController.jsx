@@ -7,15 +7,15 @@ import { usePekkaState } from "@/hooks/usePekkaState";
  * down to pure presentation components.
  */
 export default function StateController({
-  simulate = true,
   successHoldMs,
   onStateChange,
+  onTranscript,
   children,
 }) {
   const controller = usePekkaState({
-    simulate,
     successHoldMs,
     onStateChange,
+    onTranscript,
   });
 
   return children(controller);

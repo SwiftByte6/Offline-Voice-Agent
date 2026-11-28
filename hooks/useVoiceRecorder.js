@@ -4,6 +4,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export const WAVEFORM_BAR_COUNT = 44;
 
+export function computeSpeechEnergy(levels) {
+  if (!Array.isArray(levels) || levels.length === 0) return 0;
+  const total = levels.reduce((sum, val) => sum + Number(val || 0), 0);
+  const avg = total / levels.length;
+  return Number(Math.min(1, Math.max(0, (avg - 0.16) / 0.84)).toFixed(3));
+}
+
+export function sampleAudioLevels(levels, barCount = 5, restLevels = [0.22, 0.34, 0.48, 0.38, 0.26]) {
+  if (!Array.isArray(levels) || levels.length === 0) {
+    return Array.from({ length: barCount }, (_, idx) => restLevels[idx % restLevels.length]);
+  }
+  return Array.from({ length: barCount }, (_, idx) => {
+    const sampleIndex = Math.min(
+      levels.length - 1,
+      Math.floor((idx / barCount) * levels.length)
+    );
+    const raw = Number(levels[sampleIndex] ?? 0.25);
+    return Math.min(1, Math.max(0.16, raw));
+  });
+}
+
 export const IDLE_WAVEFORM_LEVELS = [
   0.22, 0.72, 0.44, 0.92, 0.61, 0.34, 0.56, 0.2, 0.78, 0.96,
   0.48, 0.28, 0.64, 0.84, 0.42, 0.31, 0.88, 0.74, 0.52, 0.24,
