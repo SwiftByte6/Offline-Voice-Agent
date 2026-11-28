@@ -1,11 +1,14 @@
-"""Centralized configuration for the NOVA Qwen3-ASR backend."""
+"""Centralized configuration for the P.E.K.K.A Jarvis-style offline STT backend."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import os
 from pathlib import Path
 
 ENGINE_DIR = Path(__file__).resolve().parent
-DEFAULT_CACHE_DIR = ENGINE_DIR / ".cache" / "qwen-asr"
+DEFAULT_CACHE_DIR = ENGINE_DIR / ".cache" / "parakeet"
+DEFAULT_WHISPER_CACHE_DIR = ENGINE_DIR / ".cache" / "whisper"
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",
@@ -14,6 +17,9 @@ DEFAULT_CORS_ORIGINS = (
     "http://tauri.localhost",
     "https://tauri.localhost",
 )
+
+DEFAULT_MODEL = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+DEFAULT_WHISPER_MODEL = "base"
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -30,14 +36,22 @@ def _parse_origins(raw: str | None) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
-class QwenASRConfig:
+class ParakeetConfig:
     model_name: str
-    device: str
-    dtype: str
-    language: str | None
     cache_dir: Path
     local_files_only: bool
-    max_new_tokens: int
+
+
+@dataclass(frozen=True)
+class WhisperConfig:
+    model_name: str
+    cache_dir: Path
+    device: str
+    compute_type: str
+    language: str | None
+    task: str
+    vad_filter: bool
+    local_files_only: bool
 
 
 @dataclass(frozen=True)
@@ -46,36 +60,49 @@ class ServerConfig:
     port: int
     max_upload_bytes: int
     cors_origins: tuple[str, ...]
-    qwen_asr: QwenASRConfig
+    parakeet: ParakeetConfig
+    whisper: WhisperConfig
 
 
 def load_config() -> ServerConfig:
-    raw_language = os.getenv("NOVA_QWEN_ASR_LANGUAGE", "").strip()
-    language = raw_language if raw_language else None
-
     cache_dir = Path(
-        os.getenv("NOVA_MODEL_CACHE_DIR", str(DEFAULT_CACHE_DIR))
+        os.getenv("PEKKA_MODEL_CACHE_DIR") or os.getenv("NOVA_MODEL_CACHE_DIR") or str(DEFAULT_CACHE_DIR)
     ).expanduser().resolve()
+    whisper_cache_dir = Path(
+        os.getenv("PEKKA_WHISPER_CACHE_DIR", str(DEFAULT_WHISPER_CACHE_DIR))
+    ).expanduser().resolve()
+    max_upload_mb = int(os.getenv("PEKKA_MAX_UPLOAD_MB") or os.getenv("NOVA_MAX_UPLOAD_MB") or "25")
 
-    max_upload_mb = int(os.getenv("NOVA_MAX_UPLOAD_MB", "25"))
+    model_name = (
+        os.getenv("PEKKA_PARAKEET_MODEL")
+        or os.getenv("PEKKA_PARAKEET_MODEL_DIR")
+        or os.getenv("PEKKA_ASR_MODEL")
+        or DEFAULT_MODEL
+    ).strip() or DEFAULT_MODEL
 
-    qwen_asr_cfg = QwenASRConfig(
-        model_name=(
-            os.getenv("NOVA_QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B").strip()
-            or "Qwen/Qwen3-ASR-0.6B"
-        ),
-        device=os.getenv("NOVA_QWEN_ASR_DEVICE", "cpu").strip() or "cpu",
-        dtype=os.getenv("NOVA_QWEN_ASR_DTYPE", "float32").strip() or "float32",
-        language=language,
+    parakeet_cfg = ParakeetConfig(
+        model_name=model_name,
         cache_dir=cache_dir,
-        local_files_only=_parse_bool(os.getenv("NOVA_QWEN_ASR_OFFLINE_ONLY"), False),
-        max_new_tokens=max(1, int(os.getenv("NOVA_QWEN_ASR_MAX_NEW_TOKENS", "512"))),
+        local_files_only=_parse_bool(os.getenv("PEKKA_PARAKEET_OFFLINE_ONLY"), False),
+    )
+
+    whisper_lang = os.getenv("PEKKA_WHISPER_LANGUAGE", "").strip() or None
+    whisper_cfg = WhisperConfig(
+        model_name=os.getenv("PEKKA_WHISPER_MODEL", DEFAULT_WHISPER_MODEL).strip() or DEFAULT_WHISPER_MODEL,
+        cache_dir=whisper_cache_dir,
+        device=os.getenv("PEKKA_WHISPER_DEVICE", "cpu").strip() or "cpu",
+        compute_type=os.getenv("PEKKA_WHISPER_COMPUTE_TYPE", "int8").strip() or "int8",
+        language=whisper_lang,
+        task=os.getenv("PEKKA_WHISPER_TASK", "transcribe").strip() or "transcribe",
+        vad_filter=_parse_bool(os.getenv("PEKKA_WHISPER_VAD"), True),
+        local_files_only=_parse_bool(os.getenv("PEKKA_WHISPER_OFFLINE_ONLY"), True),
     )
 
     return ServerConfig(
-        host=os.getenv("NOVA_ENGINE_HOST", "127.0.0.1").strip() or "127.0.0.1",
-        port=int(os.getenv("NOVA_ENGINE_PORT", "8000")),
+        host=(os.getenv("PEKKA_ENGINE_HOST") or os.getenv("NOVA_ENGINE_HOST") or "127.0.0.1").strip() or "127.0.0.1",
+        port=int(os.getenv("PEKKA_ENGINE_PORT") or os.getenv("NOVA_ENGINE_PORT") or "8000"),
         max_upload_bytes=max(1, max_upload_mb) * 1024 * 1024,
-        cors_origins=_parse_origins(os.getenv("NOVA_CORS_ORIGINS")),
-        qwen_asr=qwen_asr_cfg,
+        cors_origins=_parse_origins(os.getenv("PEKKA_CORS_ORIGINS") or os.getenv("NOVA_CORS_ORIGINS")),
+        parakeet=parakeet_cfg,
+        whisper=whisper_cfg,
     )

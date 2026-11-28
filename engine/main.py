@@ -1,4 +1,4 @@
-"""FastAPI application entrypoint for the NOVA speech recognition backend."""
+"""FastAPI application entrypoint for the P.E.K.K.A offline STT backend."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from engine.api.routes import router
 from engine.config import load_config
-from engine.speech.qwen_asr_service import QwenASRService
+from engine.speech.stt_service import OfflineSTTService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,12 +25,12 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = app.state.config
-    qwen_asr_service = QwenASRService(config.qwen_asr)
-    app.state.qwen_asr_service = qwen_asr_service
+    speech_service = OfflineSTTService(config.parakeet, config.whisper)
+    app.state.speech_service = speech_service
     app.state.transcription_lock = asyncio.Lock()
 
     # Load model in a background worker thread so /health responds immediately during startup.
-    load_task = asyncio.create_task(asyncio.to_thread(qwen_asr_service.load_model))
+    load_task = asyncio.create_task(asyncio.to_thread(speech_service.load_model))
 
     try:
         yield
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     config = load_config()
     app = FastAPI(
-        title="NOVA Speech Engine",
+        title="P.E.K.K.A Speech Engine",
         version="0.1.0",
         lifespan=lifespan,
     )

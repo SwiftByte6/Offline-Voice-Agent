@@ -1,5 +1,5 @@
-qwen-asr==0.0.6
-torch>=2.5.0
+sherpa-onnx>=1.10.0
+faster-whisper>=1.0.0
 av>=14.0.0
 numpy>=1.26.0
 fastapi>=0.115.0
@@ -9,3 +9,5 @@ mss>=10.0.0
 rapidocr-onnxruntime>=1.2.0
 opencv-python>=4.10.0
 pyautogui>=0.9.54
+sounddevice>=0.4.6
+onnxruntime>=1.17.0
