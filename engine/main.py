@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import os
 from pathlib import Path
 import sys
 
@@ -15,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engine.api.routes import router
 from engine.config import load_config
 from engine.speech.stt_service import OfflineSTTService
+from engine.voice.listener import VoiceListener
 from engine.voice.pipeline import PekkaPipeline
 
 logging.basicConfig(
@@ -27,16 +29,26 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     config = app.state.config
     speech_service = OfflineSTTService(config.parakeet, config.whisper)
+    pipeline = PekkaPipeline(stt=speech_service)
+    listener = VoiceListener(
+        stt=speech_service,
+        on_transcript=lambda text: pipeline.run(transcript=text),
+    )
     app.state.speech_service = speech_service
     app.state.transcription_lock = asyncio.Lock()
-    app.state.pekka_pipeline = PekkaPipeline(stt=speech_service)
+    app.state.pekka_pipeline = pipeline
+    app.state.voice_listener = listener
 
     # Load model in a background worker thread so /health responds immediately during startup.
     load_task = asyncio.create_task(asyncio.to_thread(speech_service.load_model))
 
+    if os.getenv("PEKKA_CONTINUOUS_LISTEN", "true").strip().lower() in {"1", "true", "yes", "on"}:
+        listener.start(loop=asyncio.get_running_loop())
+
     try:
         yield
     finally:
+        listener.stop()
         if not load_task.done():
             load_task.cancel()
             try:

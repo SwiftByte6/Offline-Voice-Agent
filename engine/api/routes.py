@@ -230,6 +230,7 @@ async def act(request: Request) -> dict:
 @router.get("/api/voice/status")
 async def voice_status(request: Request) -> dict:
     pipeline = request.app.state.pekka_pipeline
+    listener = getattr(request.app.state, "voice_listener", None)
     llm_info: dict[str, object] = {"configured": pipeline.llm is not None, "model": getattr(pipeline.llm, "model", None)}
     if pipeline.llm is not None:
         try:
@@ -240,10 +241,27 @@ async def voice_status(request: Request) -> dict:
             llm_info["reachable"] = False
             llm_info["error"] = str(exc)
     return {
+        "listener": listener.status() if listener else None,
         "llm": llm_info,
         "pending_approval": pipeline.pending_summary(),
         "recent_turns": len(pipeline.memory.recent_turns()),
     }
+
+
+@router.post("/api/voice/listen/start")
+async def voice_listen_start(request: Request) -> dict:
+    listener = getattr(request.app.state, "voice_listener", None)
+    if listener is None:
+        raise HTTPException(status_code=503, detail="Voice listener is not initialized.")
+    return listener.start(loop=asyncio.get_running_loop())
+
+
+@router.post("/api/voice/listen/stop")
+async def voice_listen_stop(request: Request) -> dict:
+    listener = getattr(request.app.state, "voice_listener", None)
+    if listener is None:
+        raise HTTPException(status_code=503, detail="Voice listener is not initialized.")
+    return listener.stop()
 
 
 @router.post("/api/voice/command")
