@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm run dev",
     "beforeBuildCommand": "pnpm run build"
   },
   "app": {
@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "NOVA",
-        "width": 340,
-        "height": 96,
+        "width": 380,
+        "height": 170,
         "resizable": false,
         "maximizable": false,
         "minimizable": false,

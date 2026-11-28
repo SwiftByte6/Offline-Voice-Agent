@@ -1,5 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "../styles/pekka.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -12,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "NOVA",
-  description: "NOVA Floating Desktop Voice Interface",
+  title: "PEKKA — Voice Pill Interface",
+  description: "Animated PEKKA-inspired voice assistant interface",
 };
 
 export default function RootLayout({ children }) {

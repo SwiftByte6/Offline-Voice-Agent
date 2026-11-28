@@ -1,0 +1,121 @@
+/* PEKKA Animated Voice Pill — Design Tokens & Keyframes */
+
+.pekka-root {
+  --pekka-faceplate-bg: #050508;
+  --pekka-border-dim: rgba(154, 122, 168, 0.54);
+  --pekka-border-purple: #a77fc0;
+  --pekka-border-purple-glow: rgba(167, 127, 192, 0.34);
+  --pekka-border-green: #89ff77;
+  --pekka-border-green-glow: rgba(137, 255, 119, 0.26);
+  --pekka-glow-intensity: 1;
+
+  --pekka-eye-scan-x: 4.5px;
+  --pekka-eye-scan-y: 1.5px;
+
+  --pekka-duration-expand: 420ms;
+  --pekka-duration-state: 260ms;
+  --pekka-duration-success: 1500ms;
+
+  --pekka-wave-bar-color: rgba(220, 220, 228, 0.68);
+  --pekka-strip-text-color: rgba(212, 212, 222, 0.66);
+  --pekka-z-color: rgba(226, 206, 238, 0.78);
+}
+
+@keyframes pekka-sleep-breathe {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -1px, 0) scale(1.008);
+  }
+}
+
+.pekka-sleep-breathe {
+  animation: pekka-sleep-breathe 4.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes pekka-z-float {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0) rotate(var(--z-rot-start, -8deg))
+      scale(var(--z-scale-start, 0.76));
+  }
+  18% {
+    opacity: var(--z-opacity-peak, 0.82);
+    transform: translate3d(calc(var(--z-dx, 14px) * 0.22), calc(var(--z-dy, -22px) * 0.2), 0)
+      rotate(var(--z-rot-mid, 4deg)) scale(1);
+  }
+  68% {
+    opacity: calc(var(--z-opacity-peak, 0.82) * 0.65);
+    transform: translate3d(calc(var(--z-dx, 14px) * 0.74), calc(var(--z-dy, -22px) * 0.72), 0)
+      rotate(var(--z-rot-end, 12deg)) scale(var(--z-scale-end, 1.06));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--z-dx, 14px), var(--z-dy, -22px), 0)
+      rotate(var(--z-rot-end, 12deg)) scale(calc(var(--z-scale-end, 1.06) * 0.92));
+  }
+}
+
+.pekka-z-particle {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--pekka-z-color);
+  text-shadow: 0 0 6px rgba(167, 127, 192, 0.22);
+  animation-name: pekka-z-float;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes pekka-success-pulse {
+  0%,
+  100% {
+    opacity: 0.48;
+  }
+  50% {
+    opacity: 0.92;
+  }
+}
+
+.pekka-success-halo {
+  animation: pekka-success-pulse 950ms ease-in-out infinite;
+  will-change: opacity;
+}
+
+@keyframes pekka-status-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 0.96;
+  }
+}
+
+.pekka-executing-text {
+  animation: pekka-status-breathe 1.6s ease-in-out infinite;
+}
+
+.pekka-transcript-mask {
+  mask-image: linear-gradient(to right, transparent 0%, #000 10%, #000 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 10%, #000 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pekka-sleep-breathe,
+  .pekka-success-halo,
+  .pekka-executing-text {
+    animation: none !important;
+  }
+
+  .pekka-z-particle {
+    animation-duration: 1.2s !important;
+  }
+}
