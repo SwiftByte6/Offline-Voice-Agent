@@ -225,3 +225,82 @@ async def act(request: Request) -> dict:
             pass
 
     return execute_action(action)
+
+
+@router.get("/api/voice/status")
+async def voice_status(request: Request) -> dict:
+    pipeline = request.app.state.pekka_pipeline
+    llm_info: dict[str, object] = {"configured": pipeline.llm is not None, "model": getattr(pipeline.llm, "model", None)}
+    if pipeline.llm is not None:
+        try:
+            models = await pipeline.llm.list_models()
+            llm_info["reachable"] = True
+            llm_info["available_models"] = models
+        except Exception as exc:  # noqa: BLE001
+            llm_info["reachable"] = False
+            llm_info["error"] = str(exc)
+    return {
+        "llm": llm_info,
+        "pending_approval": pipeline.pending_summary(),
+        "recent_turns": len(pipeline.memory.recent_turns()),
+    }
+
+
+@router.post("/api/voice/command")
+async def voice_command(request: Request) -> dict:
+    """Run a text transcript through the offline LLM + memory + permission pipeline."""
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+    if not isinstance(body, dict) or not body.get("transcript"):
+        raise HTTPException(status_code=400, detail="Missing 'transcript'.")
+    pipeline = request.app.state.pekka_pipeline
+    result = await pipeline.run(
+        transcript=str(body["transcript"]),
+        approval=bool(body.get("approval", False)),
+        require_wake_word=bool(body.get("require_wake_word", False)),
+        wake_name=str(body.get("wake_name") or "P.E.K.K.A"),
+    )
+    return result.to_dict()
+
+
+@router.post("/api/voice/agent")
+async def voice_agent(
+    request: Request,
+    file: UploadFile = File(...),
+    approval: bool = Form(False),
+    require_wake_word: bool = Form(False),
+    wake_name: str = Form("P.E.K.K.A"),
+    language: str | None = Form(None),
+) -> dict:
+    """Audio upload -> Offline STT -> Local LLM / offline fallback -> Permission -> Tool."""
+    speech_service: OfflineSTTService = request.app.state.speech_service
+    transcription_lock: asyncio.Lock = request.app.state.transcription_lock
+    max_upload_bytes: int = request.app.state.config.max_upload_bytes
+
+    if speech_service.status == "loading":
+        raise HTTPException(status_code=503, detail="Speech model is still loading.")
+    if not speech_service.ready:
+        raise HTTPException(status_code=503, detail=speech_service.error or "Speech model is unavailable.")
+    if transcription_lock.locked():
+        raise HTTPException(status_code=409, detail="Another transcription is already in progress.")
+
+    _validate_upload_headers(file)
+    temp_path: Path | None = None
+    try:
+        async with transcription_lock:
+            temp_path = await _write_temp_audio(file, max_upload_bytes)
+            pipeline = request.app.state.pekka_pipeline
+            result = await pipeline.run(
+                audio_path=temp_path,
+                approval=approval,
+                require_wake_word=require_wake_word,
+                wake_name=wake_name,
+                language=language,
+            )
+        return result.to_dict()
+    finally:
+        await file.close()
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)

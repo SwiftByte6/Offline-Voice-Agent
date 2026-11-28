@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engine.api.routes import router
 from engine.config import load_config
 from engine.speech.stt_service import OfflineSTTService
+from engine.voice.pipeline import PekkaPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     speech_service = OfflineSTTService(config.parakeet, config.whisper)
     app.state.speech_service = speech_service
     app.state.transcription_lock = asyncio.Lock()
+    app.state.pekka_pipeline = PekkaPipeline(stt=speech_service)
 
     # Load model in a background worker thread so /health responds immediately during startup.
     load_task = asyncio.create_task(asyncio.to_thread(speech_service.load_model))
