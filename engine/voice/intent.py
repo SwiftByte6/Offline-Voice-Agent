@@ -28,8 +28,8 @@ Rules:
 - The user transcript is speech-to-text; ignore wake name "Hey P.E.K.K.A" / "P.E.K.K.A".
 - For pure conversation use intent="chat", tool=null.
 - For desktop actions use intent="tool" with tool.name="pekka_act".
-  pekka_act args: {"action":"click"|"double_click"|"right_click"|"click_text"|"type"|"hotkey"|"scroll"|"move", ...}
-  click/type/hotkey require permission; move/scroll are lower risk.
+  pekka_act args: {"action":"click"|"double_click"|"right_click"|"click_text"|"type"|"type_into"|"hotkey"|"scroll"|"move"|"mouse_drag"|"list_windows"|"window_control"|"find_controls"|"read_window"|"open_folder"|"select_files"|"wait_for_window", ...}
+  click/type/hotkey/mouse_drag require permission; read/list/move/scroll/open_folder/select_files are lower risk.
 - Never pay, send, buy, delete, confirm, submit, restart, shutdown. intent="blocked".
 - If action needs user confirmation, intent="needs_approval", requires_approval=true.
 - For multi-step tasks where you need tool output before the next step, set "done": false.
@@ -114,6 +114,52 @@ def offline_fallback_intent(transcript: str, *, wake_name: str = "P.E.K.K.A") ->
             response_text="That action is blocked for safety.",
             requires_approval=False,
             reason="blocked action keyword",
+            raw={"source": "offline_rule"},
+        )
+
+    if any(sep in low for sep in (" and then ", " then ", ",")) or ("copy" in low and "paste" in low):
+        return Intent(
+            intent="needs_approval",
+            tool={"name": "pekka_run_task", "args": {"task": "multi_step", "params": {"command": cleaned}}},
+            response_text="Running multi-step task.",
+            requires_approval=True,
+            reason="multi-step desktop automation",
+            raw={"source": "offline_rule", "command": cleaned},
+        )
+
+    if re.search(r"\b(list|show|what)\b.*\bwindows?\b", low):
+        return Intent(
+            intent="tool",
+            tool={"name": "pekka_act", "args": {"action": "list_windows"}},
+            response_text="Listing open windows.",
+            requires_approval=False,
+            reason="list open windows",
+            raw={"source": "offline_rule"},
+        )
+
+    m_win = re.match(r"^(focus|switch to|minimize|minimise|maximize|maximise|restore|close)\s+(.+)$", low)
+    if m_win:
+        verb, target = m_win.group(1), m_win.group(2).strip()
+        act_map = {"switch to": "focus", "minimise": "minimize", "maximise": "maximize"}
+        win_act = act_map.get(verb, verb)
+        return Intent(
+            intent="needs_approval" if win_act == "close" else "tool",
+            tool={"name": "pekka_act", "args": {"action": "window_control", "window": target, "window_action": win_act}},
+            response_text=f"{win_act.capitalize()} {target}.",
+            requires_approval=(win_act == "close"),
+            reason=f"window {win_act}",
+            raw={"source": "offline_rule"},
+        )
+
+    m_folder = re.match(r"^open\s+(?:my\s+)?(.+?)\s+folder$", low)
+    if m_folder:
+        folder = m_folder.group(1).strip()
+        return Intent(
+            intent="tool",
+            tool={"name": "pekka_act", "args": {"action": "open_folder", "name": folder}},
+            response_text=f"Opening {folder} folder.",
+            requires_approval=False,
+            reason="open folder",
             raw={"source": "offline_rule"},
         )
 
