@@ -12,8 +12,8 @@ BLOCKED_ACTIONS = {
     "pay", "purchase", "buy", "send", "submit", "confirm", "delete", "delete_path",
     "post", "post_message", "shutdown", "restart", "format", "wipe", "run_command",
 }
-ALWAYS_ASK = {"click", "double_click", "right_click", "type", "hotkey"}
-LOW_RISK = {"move", "scroll"}
+ALWAYS_ASK = {"click", "double_click", "right_click", "click_text", "type", "type_into", "hotkey", "mouse_drag"}
+LOW_RISK = {"move", "scroll", "list_windows", "find_controls", "read_screen", "read_window", "find_text", "screenshot", "open_folder", "select_files", "wait_for_window"}
 READ_ONLY_TOOLS = {"pekka_ocr", "pekka_screen"}
 BLOCKED_WORDS = (
     "pay", "payment", "purchase", "buy", "checkout", "order", "send", "submit",
@@ -62,6 +62,11 @@ class PermissionLayer:
         if action in BLOCKED_ACTIONS or _contains_blocked_word(json_safe(args)):
             return PermissionDecision(False, False, True, "dangerous action blocked")
         if tool == "pekka_act":
+            if action == "window_control":
+                win_act = str(args.get("window_action") or args.get("subaction") or "focus").lower()
+                if win_act == "close":
+                    return PermissionDecision(True, False, False, "approved") if approved else PermissionDecision(False, True, False, "closing window needs approval")
+                return PermissionDecision(True, False, False, "window control")
             if action in LOW_RISK:
                 return PermissionDecision(True, False, False, "low risk")
             if action in ALWAYS_ASK:
