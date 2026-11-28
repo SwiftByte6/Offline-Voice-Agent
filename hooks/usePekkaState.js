@@ -161,8 +161,8 @@ function pekkaReducer(state, action) {
 }
 
 /**
- * Controlled state machine for the PEKKA pill, its local mic capture, and the
- * FastAPI continuous listener that drives wake-triggered agent turns.
+ * Controlled state machine for the PEKKA pill, local mic capture, and optional
+ * FastAPI background listening.
  */
 export function usePekkaState({
   successHoldMs = SUCCESS_HOLD_MS,
@@ -216,8 +216,8 @@ export function usePekkaState({
           llm: vs.llm,
           tts: vs.tts,
         });
-        if (diagnosticsKeyRef.current !== diagnosticsKey) {
-          diagnosticsKeyRef.current = diagnosticsKey;
+        if (voiceDiagnosticsKeyRef.current !== diagnosticsKey) {
+          voiceDiagnosticsKeyRef.current = diagnosticsKey;
           setVoiceDiagnostics(vs);
         }
       }
