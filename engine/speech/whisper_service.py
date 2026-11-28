@@ -68,6 +68,18 @@ def _decode_audio_to_float32(path: Path, sampling_rate: int = 16000) -> np.ndarr
     return audio_s16.astype(np.float32) / 32768.0
 
 
+def _normalise(samples: np.ndarray, target_peak: float = 20000.0) -> np.ndarray:
+    """Boost quiet microphone/file audio before Whisper, matching the Parakeet path."""
+    if samples.size == 0:
+        return samples
+    target_float = target_peak / 32768.0
+    peak = float(np.max(np.abs(samples)))
+    if peak == 0 or peak >= target_float:
+        return samples
+    gain = min(30.0, target_float / peak)
+    return np.clip(samples * gain, -1.0, 1.0).astype(np.float32)
+
+
 class WhisperService:
     """Manages a single Faster-Whisper model instance for the application lifecycle."""
 
@@ -134,6 +146,7 @@ class WhisperService:
     def _transcribe_samples(self, audio: np.ndarray, *, language: str | None = None) -> TranscriptionResult:
         if audio.size == 0:
             raise InvalidAudioError("Audio recording contains no playable audio frames.")
+        audio = _normalise(audio)
         try:
             segments, info = self._model.transcribe(
                 audio,

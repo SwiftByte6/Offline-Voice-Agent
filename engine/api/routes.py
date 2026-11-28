@@ -4,6 +4,7 @@ import asyncio
 import os
 from pathlib import Path
 import tempfile
+import time
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
@@ -29,6 +30,29 @@ ALLOWED_CONTENT_TYPE_PREFIXES = ("audio/", "video/webm")
 UPLOAD_CHUNK_SIZE = 64 * 1024
 
 router = APIRouter()
+
+
+async def _probe_local_llm(app: object, llm: object) -> None:
+    try:
+        models = await llm.list_models()
+        explicit_model = getattr(llm, "_explicit_model", None)
+        available_models = [str(model) for model in models]
+        app.state.local_llm_status = {
+            "reachable": True,
+            "model_available": explicit_model in available_models if explicit_model else bool(available_models),
+            "available_models": available_models,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        app.state.local_llm_status = {
+            "reachable": False,
+            "model_available": False,
+            "available_models": [],
+            "error": str(exc),
+        }
+    finally:
+        app.state.local_llm_checked_at = time.monotonic()
+        app.state.local_llm_probe = None
 
 
 def _resolve_suffix(file: UploadFile) -> str:
@@ -231,19 +255,29 @@ async def act(request: Request) -> dict:
 async def voice_status(request: Request) -> dict:
     pipeline = request.app.state.pekka_pipeline
     listener = getattr(request.app.state, "voice_listener", None)
+    # This endpoint is polled while the always-on listener is active. Keep it
+    # fast and avoid probing the local LLM on every status request.
     llm_info: dict[str, object] = {"configured": pipeline.llm is not None, "model": getattr(pipeline.llm, "model", None)}
     if pipeline.llm is not None:
-        try:
-            models = await pipeline.llm.list_models()
-            llm_info["reachable"] = True
-            llm_info["available_models"] = models
-        except Exception as exc:  # noqa: BLE001
-            llm_info["reachable"] = False
-            llm_info["error"] = str(exc)
+        llm_info["base_url"] = pipeline.llm.base_url
+        cached = getattr(request.app.state, "local_llm_status", None)
+        if cached:
+            llm_info.update(cached)
+        else:
+            llm_info.update({"reachable": None, "model_available": None, "error": None})
+        checked_at = getattr(request.app.state, "local_llm_checked_at", 0.0)
+        probe = getattr(request.app.state, "local_llm_probe", None)
+        if time.monotonic() - checked_at >= 30 and (probe is None or probe.done()):
+            request.app.state.local_llm_probe = asyncio.create_task(_probe_local_llm(request.app, pipeline.llm))
     return {
         "listener": listener.status() if listener else None,
         "llm": llm_info,
-        "tts": {"available": pipeline.tts.available, "exe": pipeline.tts.exe or None, "model": pipeline.tts.model or None},
+        "tts": {
+            "available": pipeline.tts.available,
+            "backend": pipeline.tts.backend,
+            "exe": pipeline.tts.exe or None,
+            "model": pipeline.tts.model or None,
+        },
         "pending_approval": pipeline.pending_summary(),
         "recent_turns": len(pipeline.memory.recent_turns()),
     }

@@ -2,8 +2,8 @@
 
 Keeps one `piper.exe` process alive in `--output_dir` mode so only the first sentence pays model
 load time. Auto-discovers `piper.exe` and `.onnx` voice models from `PEKKA_PIPER_EXE` /
-`PEKKA_PIPER_MODEL`, `engine/.cache/piper`, or `%LOCALAPPDATA%/JARVIS/voice`.
-If Piper isn't installed, returns PiperSpeechResult(spoken=False, ...) without raising.
+`PEKKA_PIPER_MODEL`, `engine/.cache/piper`, or `%LOCALAPPDATA%/JARVIS/voice`. When Piper isn't
+installed, Windows System.Speech provides an offline local WAV fallback.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import base64
 import io
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -170,13 +171,23 @@ class PiperTTS:
         disc_exe, disc_model = _discover_piper()
         self.exe = exe or disc_exe
         self.model = model or disc_model
+        self.system_speech_exe = (
+            shutil.which("powershell.exe") or shutil.which("powershell")
+        ) if os.name == "nt" else None
         self.sentence_silence = sentence_silence or os.getenv("PEKKA_PIPER_SENTENCE_SILENCE") or SENTENCE_SILENCE
         self._piper: _PersistentPiper | None = None
         self._stop_event = threading.Event()
 
     @property
     def available(self) -> bool:
-        return bool(self.exe) and Path(self.exe).is_file() and bool(self.model) and Path(self.model).is_file()
+        piper_available = bool(self.exe) and Path(self.exe).is_file() and bool(self.model) and Path(self.model).is_file()
+        return piper_available or bool(self.system_speech_exe)
+
+    @property
+    def backend(self) -> str | None:
+        if self.exe and Path(self.exe).is_file() and self.model and Path(self.model).is_file():
+            return "piper"
+        return "windows_sapi" if self.system_speech_exe else None
 
     def stop(self) -> None:
         """Stop any ongoing local speaker playback immediately (barge-in)."""
@@ -194,6 +205,39 @@ class PiperTTS:
                 self._piper.close()
             self._piper = _PersistentPiper(self.exe, self.model, self.sentence_silence)
         return self._piper
+
+    def _synth_system_speech(self, text: str) -> bytes | None:
+        """Synthesize a local WAV with the installed Windows SAPI voice as a Piper fallback."""
+        if not self.system_speech_exe:
+            return None
+        with tempfile.TemporaryDirectory(prefix="pekka-sapi-") as temp_dir:
+            wav_path = Path(temp_dir) / "speech.wav"
+            script_path = Path(temp_dir) / "synthesize.ps1"
+            text_b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+            script_path.write_text(
+                "\ufeff$ErrorActionPreference = 'Stop'\n"
+                "Add-Type -AssemblyName System.Speech\n"
+                "$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()))\n"
+                "$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
+                "$synth.SetOutputToWaveFile($args[0])\n"
+                "$synth.Speak($text)\n"
+                "$synth.Dispose()\n",
+                encoding="utf-8",
+            )
+            try:
+                subprocess.run(
+                    [self.system_speech_exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script_path), str(wav_path)],
+                    input=text_b64 + "\n",
+                    text=True,
+                    encoding="ascii",
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                    creationflags=_CREATE_NO_WINDOW,
+                )
+                return wav_path.read_bytes() if wav_path.is_file() else None
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"Windows offline speech synthesis failed: {exc}") from exc
 
     def _play_wav_bytes(self, wav_bytes: bytes) -> None:
         try:
@@ -224,16 +268,29 @@ class PiperTTS:
                 error="Piper not available: set PEKKA_PIPER_EXE and PEKKA_PIPER_MODEL; piper.exe not found",
             )
         self._stop_event.clear()
-        piper = self._get_piper()
         wavs: list[bytes] = []
-        for part in parts:
-            if self._stop_event.is_set():
-                break
-            wav = await asyncio.to_thread(piper.synth, part)
-            if wav:
-                wavs.append(wav)
-                if play_local:
-                    await asyncio.to_thread(self._play_wav_bytes, wav)
+        if self.backend == "piper":
+            piper = self._get_piper()
+            for part in parts:
+                if self._stop_event.is_set():
+                    break
+                wav = await asyncio.to_thread(piper.synth, part)
+                if wav:
+                    wavs.append(wav)
+                    if play_local:
+                        await asyncio.to_thread(self._play_wav_bytes, wav)
+        else:
+            for part in parts:
+                if self._stop_event.is_set():
+                    break
+                try:
+                    wav = await asyncio.to_thread(self._synth_system_speech, part)
+                except RuntimeError as exc:
+                    return PiperSpeechResult(spoken=False, sentences=len(parts), audio_base64=None, error=str(exc))
+                if wav:
+                    wavs.append(wav)
+                    if play_local:
+                        await asyncio.to_thread(self._play_wav_bytes, wav)
         if not wavs:
             return PiperSpeechResult(spoken=False, sentences=len(parts), audio_base64=None, error="Piper did not produce speech")
         combined = _combine_wavs(wavs)

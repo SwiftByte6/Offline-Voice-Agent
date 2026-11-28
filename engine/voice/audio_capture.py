@@ -43,44 +43,60 @@ def to_wav(pcm: bytes) -> bytes:
     return buf.getvalue()
 
 
-def record_utterance(stop: threading.Event, on_audio: Callable[[bytes], None] | None = None) -> bytes | None:
-    """Record default microphone 16 kHz mono int16 until speaker pauses."""
+def record_utterance(
+    stop: threading.Event,
+    on_audio: Callable[[bytes], None] | None = None,
+    *,
+    stream: object | None = None,
+    block: int | None = None,
+) -> bytes | None:
+    """Record 16 kHz mono int16 until speaker pauses, reusing an existing input stream if given."""
     import sounddevice as sd
 
     frames: list[bytes] = []
-    block = int(RATE * 0.05)
+    block = block or int(RATE * 0.05)
     noise: list[float] = []
     spoken = False
     loud_for = 0.0
     quiet_for = 0.0
+    captured_seconds = 0.0
     started = time.monotonic()
-    with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=block) as stream:
+
+    def capture(input_stream: object) -> bytes | None:
+        nonlocal loud_for, quiet_for, spoken, captured_seconds
         while not stop.is_set():
-            data, _ = stream.read(block)
+            data, _ = input_stream.read(block)
             data = bytes(data)
             if on_audio:
                 on_audio(data)
             level = _rms(data)
+            duration = len(data) / 2 / RATE
+            captured_seconds += duration
             elapsed = time.monotonic() - started
-            if elapsed < 0.3:
+            if stream is None and elapsed < 0.3:
                 noise.append(level)
                 continue
             threshold = max(110.0, (sum(noise) / max(1, len(noise))) * 2.5)
             frames.append(data)
             if level > threshold:
-                loud_for += 0.05
+                loud_for += duration
                 quiet_for = 0.0
                 if loud_for >= 0.3:
                     spoken = True
             else:
-                quiet_for += 0.05
+                quiet_for += duration
             if spoken and quiet_for >= END_SILENCE_S:
                 break
             if not spoken and elapsed >= NO_SPEECH_S:
                 return None
-            if elapsed >= MAX_UTTERANCE_S:
+            if captured_seconds >= MAX_UTTERANCE_S:
                 break
-    return b"".join(frames) if spoken else None
+        return b"".join(frames) if spoken else None
+
+    if stream is not None:
+        return capture(stream)
+    with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=block) as input_stream:
+        return capture(input_stream)
 
 
 def make_gate() -> SpeechGate:

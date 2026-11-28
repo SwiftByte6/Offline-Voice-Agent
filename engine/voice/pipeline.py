@@ -263,7 +263,33 @@ class PekkaPipeline:
                     if intent.raw.get("done") is not False:
                         break
 
-        response_text = intent.response_text or _response_from_tool(tool_result) or cleaned
+        tool_response = ""
+        if intent.tool_name == "pekka_ocr" and tool_result and tool_result.get("ok"):
+            items = (tool_result.get("result") or {}).get("items", [])
+            visible_text = "\n".join(
+                str(item.get("text", "")).strip()
+                for item in items
+                if isinstance(item, dict) and str(item.get("text", "")).strip()
+            )
+            if self.llm is not None and visible_text:
+                try:
+                    summary = await self.llm.chat_messages([
+                        {
+                            "role": "system",
+                            "content": "Answer the user's request using only the OCR text read from their screen. Do not claim to see anything that is not in the OCR. Return JSON with one short spoken `response_text` string.",
+                        },
+                        {
+                            "role": "user",
+                            "content": json.dumps({"request": cleaned, "screen_text": visible_text[:6000]}, ensure_ascii=False),
+                        },
+                    ])
+                    tool_response = str(summary.get("response_text") or "").strip()
+                except LocalLLMUnavailable as exc:
+                    errors.append(f"local LLM could not summarize screen text: {exc}")
+            if not tool_response:
+                tool_response = f"On the screen I can read: {visible_text[:700]}" if visible_text else "I couldn't read any text on the screen."
+
+        response_text = tool_response or _response_from_tool(tool_result) or intent.response_text or cleaned
         self.memory.add_turn("user", cleaned)
         self.memory.add_turn("assistant", response_text, tool=intent.tool_name)
         return await self._finish(

@@ -55,21 +55,45 @@ function getBorderVisuals(status) {
   }
 }
 
-function getAriaLabel(status, hasRetryBlob, backendHealth) {
+function getRuntimeWarnings(backendHealth, voiceDiagnostics) {
+  const warnings = [];
+  if (!backendHealth.reachable) {
+    warnings.push("Speech engine is offline.");
+  } else if (backendHealth.modelStatus === "loading") {
+    warnings.push("Speech model is loading.");
+  }
+  if (voiceDiagnostics?.llm?.configured && voiceDiagnostics.llm.reachable === false) {
+    warnings.push("Local LLM is offline; basic intent rules are active.");
+  } else if (
+    voiceDiagnostics?.llm?.configured &&
+    voiceDiagnostics.llm.model_available === false
+  ) {
+    warnings.push(`Local LLM model ${voiceDiagnostics.llm.model || "configured model"} is not installed.`);
+  }
+  if (voiceDiagnostics?.tts?.available === false) {
+    warnings.push("Offline speech output is unavailable.");
+  }
+  return warnings;
+}
+
+function getAriaLabel(status, hasRetryBlob, backendHealth, voiceDiagnostics) {
   switch (status) {
     case PEKKA_STATES.SLEEPING:
-      if (!backendHealth.reachable) {
-        return "PEKKA voice assistant sleeping. Speech engine offline. Click to wake.";
-      }
-      if (backendHealth.modelStatus === "loading") {
-        return "PEKKA voice assistant sleeping. Loading speech model. Click to wake.";
-      }
-      return "PEKKA voice assistant sleeping. Click to wake and speak.";
+      return `PEKKA voice assistant sleeping. Click to wake and speak. ${getRuntimeWarnings(backendHealth, voiceDiagnostics).join(" ")}`.trim();
     case PEKKA_STATES.LISTENING:
+      if (voiceDiagnostics?.listener?.state === "listening_utterance") {
+        return "Pekka heard the wake name and is listening for your command.";
+      }
       return "PEKKA listening. Click to stop and transcribe.";
     case PEKKA_STATES.EXECUTING:
+      if (voiceDiagnostics?.listener?.enabled && voiceDiagnostics.listener.state !== "idle") {
+        return "Pekka is understanding your request and will speak the result.";
+      }
       return "PEKKA transcribing audio. Click to cancel and return to sleep.";
     case PEKKA_STATES.SUCCESS:
+      if (voiceDiagnostics?.listener?.event?.phase === "success") {
+        return "Pekka has replied and will return to sleep automatically.";
+      }
       return "PEKKA completed transcription. Click to return to sleep.";
     case PEKKA_STATES.ERROR:
       return hasRetryBlob
@@ -88,6 +112,7 @@ function PekkaPillShell({
   isStartingMic,
   audioLevels,
   backendHealth,
+  voiceDiagnostics,
   hasRetryBlob,
   handlePillClick,
   cancel,
@@ -182,7 +207,8 @@ function PekkaPillShell({
         tabIndex={0}
         onClick={handlePillClick}
         onKeyDown={handleKeyDown}
-        aria-label={getAriaLabel(status, hasRetryBlob, backendHealth)}
+        aria-label={getAriaLabel(status, hasRetryBlob, backendHealth, voiceDiagnostics)}
+        title={getAriaLabel(status, hasRetryBlob, backendHealth, voiceDiagnostics)}
         data-pekka-state={status}
         initial={false}
         animate={{
@@ -216,23 +242,18 @@ function PekkaPillShell({
         }`}
         style={{ backgroundColor: "var(--pekka-faceplate-bg)" }}
       >
-        {/* Subtle backend readiness dot when sleeping and engine is offline or loading */}
-        {isSleeping &&
-          (!backendHealth.reachable || backendHealth.modelStatus === "loading") && (
-            <span
-              aria-hidden="true"
-              title={
-                !backendHealth.reachable
-                  ? "Speech engine offline"
-                  : "Loading Qwen3-ASR model..."
-              }
-              className={`pointer-events-none absolute top-2 right-2 z-20 h-1.5 w-1.5 rounded-full ${
-                !backendHealth.reachable
-                  ? "bg-rose-500"
-                  : "animate-pulse bg-amber-400"
-              }`}
-            />
-          )}
+        {/* Runtime warning dot for missing wake, LLM, or speech resources */}
+        {isSleeping && getRuntimeWarnings(backendHealth, voiceDiagnostics).length > 0 && (
+          <span
+            aria-hidden="true"
+            title={getRuntimeWarnings(backendHealth, voiceDiagnostics).join(" ")}
+            className={`pointer-events-none absolute top-2 right-2 z-20 h-1.5 w-1.5 rounded-full ${
+              !backendHealth.reachable
+                ? "bg-rose-500"
+                : "animate-pulse bg-amber-400"
+            }`}
+          />
+        )}
 
         {/* Dynamic speech-reactive glow strictly around the borders while listening */}
         {isListening && !isStartingMic && !prefersReducedMotion && (
@@ -387,7 +408,7 @@ function PekkaPillShell({
 
 /**
  * Main PEKKA Animated Voice Pill composition component.
- * Connects directly to microphone capture and the local FastAPI Qwen3-ASR backend.
+ * Connects the pill to the local FastAPI speech engine and continuous wake listener.
  */
 export default function PekkaVoicePill({
   successHoldMs,
@@ -409,6 +430,7 @@ export default function PekkaVoicePill({
           isStartingMic={controller.isStartingMic}
           audioLevels={controller.audioLevels}
           backendHealth={controller.backendHealth}
+          voiceDiagnostics={controller.voiceDiagnostics}
           hasRetryBlob={controller.hasRetryBlob}
           handlePillClick={controller.handlePillClick}
           cancel={controller.cancel}

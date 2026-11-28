@@ -10,7 +10,7 @@ GATE_ONSET_S = 0.24
 GATE_PREROLL_S = 0.5
 GATE_END_S = 0.7
 GATE_MAX_S = 8.0
-GATE_MIN_LEVEL = 110.0
+GATE_MIN_LEVEL = 75.0
 
 
 def rms(chunk: bytes) -> float:

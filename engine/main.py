@@ -30,9 +30,16 @@ async def lifespan(app: FastAPI):
     config = app.state.config
     speech_service = OfflineSTTService(config.parakeet, config.whisper)
     pipeline = PekkaPipeline(stt=speech_service)
+
+    async def run_voice_turn(text: str) -> dict:
+        result = await pipeline.run(transcript=text, speak=True, play_local=True)
+        payload = result.to_dict()
+        listener.complete_turn(payload)
+        return payload
+
     listener = VoiceListener(
         stt=speech_service,
-        on_transcript=lambda text: pipeline.run(transcript=text),
+        on_transcript=run_voice_turn,
     )
     app.state.speech_service = speech_service
     app.state.transcription_lock = asyncio.Lock()
@@ -42,7 +49,7 @@ async def lifespan(app: FastAPI):
     # Load model in a background worker thread so /health responds immediately during startup.
     load_task = asyncio.create_task(asyncio.to_thread(speech_service.load_model))
 
-    if os.getenv("PEKKA_CONTINUOUS_LISTEN", "true").strip().lower() in {"1", "true", "yes", "on"}:
+    if os.getenv("PEKKA_CONTINUOUS_LISTEN", "false").strip().lower() in {"1", "true", "yes", "on"}:
         listener.start(loop=asyncio.get_running_loop())
 
     try:

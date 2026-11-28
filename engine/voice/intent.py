@@ -30,6 +30,8 @@ Rules:
 - For desktop actions use intent="tool" with tool.name="pekka_act".
   pekka_act args: {"action":"click"|"double_click"|"right_click"|"click_text"|"type"|"type_into"|"hotkey"|"scroll"|"move"|"mouse_drag"|"list_windows"|"window_control"|"find_controls"|"read_window"|"open_folder"|"select_files"|"wait_for_window", ...}
   click/type/hotkey/mouse_drag require permission; read/list/move/scroll/open_folder/select_files are lower risk.
+- When asked to read, scan, or describe visible screen text (including "what's on my screen"), use tool.name="pekka_ocr" with empty args. The tool output is the recognized screen text; use it to answer.
+- When asked to capture or take a screenshot, use tool.name="pekka_screen" with empty args.
 - Never pay, send, buy, delete, confirm, submit, restart, shutdown. intent="blocked".
 - If action needs user confirmation, intent="needs_approval", requires_approval=true.
 - For multi-step tasks where you need tool output before the next step, set "done": false.
@@ -90,6 +92,19 @@ def noop_intent(transcript: str, response_text: str | None = None) -> Intent:
 
 _APPROVAL_RE = re.compile(r"^(yes,?\s*)?(go ahead|confirm|approved?|do it|proceed|yes please|yes)\b", re.I)
 _CANCEL_RE = re.compile(r"^(no|cancel|abort|stop|never\s*mind|don'?t)\b", re.I)
+_SCREEN_READ_RE = re.compile(
+    r"\b(?:read|scan|describe|summari[sz]e)\b.{0,60}\b(?:screen|display|window)\b"
+    r"|\bwhat(?:'s|\s+is)\s+(?:shown|displayed|visible)\b"
+    r"|\bwhat(?:'s|\s+is)\s+on\s+(?:my\s+)?(?:screen|display|window)\b"
+    r"|\bwhat\s+does\s+(?:my\s+)?(?:screen|display|window)\s+say\b"
+    r"|\bocr\b",
+    re.I,
+)
+
+
+def is_screen_read_request(transcript: str) -> bool:
+    """Recognize explicit screen-reading requests without relying on LLM classification."""
+    return bool(_SCREEN_READ_RE.search(clean_transcript(transcript)))
 
 
 def is_approval_phrase(text: str) -> bool:
@@ -227,6 +242,17 @@ async def detect_intent(
     transcript = clean_transcript(transcript, strip_name=True, wake_name=wake_name)
     if not transcript:
         return Intent(intent="noop", response_text="", raw={})
+    # Screen reading must reliably invoke OCR even if an LLM is slow, unavailable,
+    # or classifies the request as ordinary conversation. The LLM still summarizes
+    # the OCR observation later in PekkaPipeline.
+    if is_screen_read_request(transcript):
+        return Intent(
+            intent="tool",
+            tool={"name": "pekka_ocr", "args": {}},
+            response_text="Reading the screen.",
+            reason="explicit screen-reading request",
+            raw={"source": "screen_read_rule"},
+        )
     if llm is None:
         return offline_fallback_intent(transcript, wake_name=wake_name)
     payload: dict[str, Any] = {"transcript": transcript, "wake_name": wake_name}

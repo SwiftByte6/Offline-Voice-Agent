@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { checkBackendHealth, transcribeAudioBlob } from "@/lib/speechApi";
+import {
+  checkBackendHealth,
+  getVoiceStatus,
+  runVoiceAgentBlob,
+  stopVoiceListener,
+} from "@/lib/speechApi";
 
 export const PEKKA_STATES = Object.freeze({
   SLEEPING: "SLEEPING",
@@ -108,6 +113,37 @@ function pekkaReducer(state, action) {
         errorMessage: action.message || "Speech recognition failed.",
       };
     }
+    case "WAKE_RESULT": {
+      if (state.status !== PEKKA_STATES.SLEEPING) return state;
+      return {
+        ...state,
+        status: PEKKA_STATES.SUCCESS,
+        transcript: action.transcript || "",
+        executionStatus: "",
+        errorMessage: "",
+        isStartingMic: false,
+        sessionId: action.sessionId,
+      };
+    }
+    case "LISTENER_UPDATE": {
+      const event = action.event || {};
+      if (event.phase === "listening") {
+        return { ...state, status: PEKKA_STATES.LISTENING, transcript: event.transcript || "Listening...", executionStatus: "", errorMessage: "", isStartingMic: false, sessionId: action.sessionId };
+      }
+      if (event.phase === "transcribing" || event.phase === "processing") {
+        return { ...state, status: PEKKA_STATES.EXECUTING, transcript: event.transcript || state.transcript, executionStatus: event.phase === "transcribing" ? "Transcribing..." : "Understanding and acting...", errorMessage: "", isStartingMic: false, sessionId: action.sessionId };
+      }
+      if (event.phase === "success") {
+        return { ...state, status: PEKKA_STATES.SUCCESS, transcript: event.response_text || event.transcript || "Done.", executionStatus: "", errorMessage: "", isStartingMic: false, sessionId: action.sessionId };
+      }
+      if (event.phase === "error") {
+        return { ...state, status: PEKKA_STATES.ERROR, transcript: event.transcript || state.transcript, executionStatus: "", errorMessage: event.error || "Voice command failed.", isStartingMic: false, sessionId: action.sessionId };
+      }
+      if (event.phase === "idle") {
+        return { ...state, status: PEKKA_STATES.SLEEPING, transcript: "", executionStatus: "", errorMessage: "", isStartingMic: false };
+      }
+      return state;
+    }
     case "SLEEP": {
       if (state.status === PEKKA_STATES.SLEEPING) return state;
       return {
@@ -125,8 +161,8 @@ function pekkaReducer(state, action) {
 }
 
 /**
- * Controlled state machine for the PEKKA voice pill backed by real microphone
- * capture (`useVoiceRecorder`) and the local FastAPI Qwen3-ASR backend (`/api/transcribe`).
+ * Controlled state machine for the PEKKA pill, its local mic capture, and the
+ * FastAPI continuous listener that drives wake-triggered agent turns.
  */
 export function usePekkaState({
   successHoldMs = SUCCESS_HOLD_MS,
@@ -141,6 +177,7 @@ export function usePekkaState({
     model: null,
     error: null,
   });
+  const [voiceDiagnostics, setVoiceDiagnostics] = useState(null);
   const [hasRetryBlob, setHasRetryBlob] = useState(false);
 
   const timersRef = useRef(new Set());
@@ -153,6 +190,69 @@ export function usePekkaState({
   const healthPollTimerRef = useRef(null);
   const isMountedRef = useRef(true);
   const onTranscriptRef = useRef(onTranscript);
+  const lastListenerEventIdRef = useRef(null);
+  const manualSessionRef = useRef(false);
+  const listenerSessionRef = useRef(false);
+  const statusPollActiveRef = useRef(false);
+  const voiceDiagnosticsKeyRef = useRef("");
+
+  useEffect(() => {
+    if (!backendHealth.ready) return undefined;
+    let active = true;
+    const timer = window.setInterval(async () => {
+      if (!active || statusPollActiveRef.current) return;
+      statusPollActiveRef.current = true;
+      const vs = await getVoiceStatus();
+      const listener = vs?.listener;
+      if (active && vs) {
+        const diagnosticsKey = JSON.stringify({
+          listener: vs.listener && {
+            enabled: vs.listener.enabled,
+            state: vs.listener.state,
+            wake_mode: vs.listener.wake_mode,
+            last_error: vs.listener.last_error,
+            event: vs.listener.event,
+          },
+          llm: vs.llm,
+          tts: vs.tts,
+        });
+        if (diagnosticsKeyRef.current !== diagnosticsKey) {
+          diagnosticsKeyRef.current = diagnosticsKey;
+          setVoiceDiagnostics(vs);
+        }
+      }
+      if (active && listener) {
+        const event = listener.event;
+        const eventId = Number(event?.id || 0);
+        if (lastListenerEventIdRef.current === null) {
+          lastListenerEventIdRef.current = eventId;
+        } else if (eventId > lastListenerEventIdRef.current) {
+          lastListenerEventIdRef.current = eventId;
+          if (event.phase === "idle" && manualSessionRef.current) {
+            statusPollActiveRef.current = false;
+            return;
+          }
+          listenerSessionRef.current = event.phase !== "idle";
+          const targetSessionId = activeSessionIdRef.current + 1;
+          activeSessionIdRef.current = targetSessionId;
+          dispatch({ type: "LISTENER_UPDATE", sessionId: targetSessionId, event });
+          if (event.phase === "success") {
+            manualSessionRef.current = false;
+            window.setTimeout(() => {
+              if (activeSessionIdRef.current !== targetSessionId) return;
+              dispatch({ type: "SLEEP" });
+              listenerSessionRef.current = false;
+            }, successHoldMs);
+          }
+        }
+      }
+      statusPollActiveRef.current = false;
+    }, 900);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [backendHealth.ready, successHoldMs]);
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
@@ -244,6 +344,7 @@ export function usePekkaState({
       scheduleTimer(() => {
         if (activeSessionIdRef.current !== targetSessionId) return;
         dispatch({ type: "SLEEP" });
+        manualSessionRef.current = false;
       }, successHoldMs);
     },
     [scheduleTimer, successHoldMs]
@@ -275,7 +376,7 @@ export function usePekkaState({
       requestAbortRef.current = controller;
 
       try {
-        const result = await transcribeAudioBlob(audioBlob, {
+        const result = await runVoiceAgentBlob(audioBlob, {
           signal: controller.signal,
         });
 
@@ -296,7 +397,7 @@ export function usePekkaState({
           error: null,
         }));
 
-        const finalText = result.text || "No speech detected.";
+        const finalText = result.responseText || result.text || "No speech detected.";
         dispatch({
           type: "MARK_SUCCESS",
           sessionId: targetSessionId,
@@ -345,6 +446,9 @@ export function usePekkaState({
     dispatch({ type: "ACTIVATE", sessionId: targetSessionId });
 
     try {
+      manualSessionRef.current = true;
+      listenerSessionRef.current = false;
+      await stopVoiceListener();
       const started = await startRecording();
       isStartingMicRef.current = false;
 
@@ -443,9 +547,12 @@ export function usePekkaState({
     lastAudioBlobRef.current = null;
     setHasRetryBlob(false);
     dispatch({ type: "SLEEP" });
+    listenerSessionRef.current = false;
+    manualSessionRef.current = false;
   }, [cleanupAudioResources, clearAllTimers]);
 
   const handlePillClick = useCallback(() => {
+    if (listenerSessionRef.current) return;
     switch (statusRef.current) {
       case PEKKA_STATES.SLEEPING:
         activate();
@@ -480,6 +587,7 @@ export function usePekkaState({
     sessionId: state.sessionId,
     audioLevels,
     backendHealth,
+    voiceDiagnostics,
     hasRetryBlob,
     activate,
     stopAndTranscribe,

@@ -5,12 +5,12 @@ from __future__ import annotations
 import re
 
 _NAME = re.compile(
-    r"\b(pekka|p\.e\.k\.k\.a|nova|jarvis|jarvys|jervis|jarvas|jarves|javis)\b",
+    r"\b(pekka|p\.e\.k\.k\.a|peka|pecca|pecka|pecker|packa|paca|pika|pega|becca|becker|becky|pk|nova|jarvis|jarvys|jervis|jarvas|jarves|javis)\b",
     re.I,
 )
 
 _WAKE_PREFIX = re.compile(
-    r"^(hey|ok|okay)?\s*(pekka|p\.e\.k\.k\.a|nova|jarvis|jarvys|jervis|jarvas|jarves|javis)\b[\s,.!?\-]*",
+    r"^(hey|ok|okay|a)?\s*(pekka|p\.e\.k\.k\.a|peka|pecca|pecka|pecker|packa|paca|pika|pega|becca|becker|becky|pk|nova|jarvis|jarvys|jervis|jarvas|jarves|javis)\b[\s,.!?\-]*",
     re.I,
 )
 

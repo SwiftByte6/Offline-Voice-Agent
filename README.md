@@ -1,6 +1,6 @@
 # NOVA — Offline Voice Agent
 
-Floating desktop voice interface built with **Next.js (JavaScript) + React + Tailwind CSS + Tauri 2** and a local **FastAPI + Qwen3-ASR-0.6B** speech recognition backend.
+Floating desktop voice interface built with **Next.js (JavaScript) + React + Tailwind CSS + Tauri 2** and a local **FastAPI** voice engine. Speech recognition uses NVIDIA Parakeet through sherpa-onnx, with Faster-Whisper as an offline fallback.
 
 ## Prerequisites
 
@@ -25,16 +25,16 @@ python -m venv engine\.venv
 
 ## 2. Run NOVA (2 Terminals)
 
-### Terminal 1 — Start the Python Speech Engine (FastAPI + Qwen3-ASR-0.6B)
+### Terminal 1 — Start the Python Speech Engine (FastAPI + Parakeet / Whisper)
 
 ```powershell
 .\engine\.venv\Scripts\python.exe -m uvicorn engine.main:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-- Wait until you see `Qwen3-ASR model 'Qwen/Qwen3-ASR-0.6B' is ready.`
-- First launch downloads Qwen3-ASR-0.6B into `engine\.cache\qwen-asr`. Later launches use the cached model.
-- Set `NOVA_QWEN_ASR_OFFLINE_ONLY=true` after the first download to prevent model downloads and Hub requests.
-- CPU with `float32` is the default. On a compatible GPU, set `NOVA_QWEN_ASR_DEVICE=cuda:0` and `NOVA_QWEN_ASR_DTYPE=bfloat16` before starting the engine.
+- The engine loads Parakeet first and tries the cached Faster-Whisper model if Parakeet is unavailable. Parakeet weights are cached under `engine\.cache\parakeet`.
+- Pekka uses click-to-talk by default: click the pill to start recording, speak, then click again to send the audio through offline STT and the voice pipeline. Set `PEKKA_CONTINUOUS_LISTEN=true` only if you want optional background wake listening.
+- To enable LLM understanding offline, install Ollama, download a model once with `ollama pull llama3.2`, and keep the local service running. Pekka uses the Ollama-compatible endpoint at `http://127.0.0.1:11434/v1` by default; set `PEKKA_LLM_BASE_URL` or `PEKKA_LLM_MODEL` to use another local model. Without a reachable local LLM, Pekka falls back to deterministic offline intent rules.
+- Piper TTS is discovered under `engine\.cache\piper` or `%LOCALAPPDATA%\JARVIS\voice`. Otherwise Pekka uses the installed Windows System.Speech voice as an offline fallback. Set `PEKKA_PIPER_EXE` and `PEKKA_PIPER_MODEL` to prefer local Piper files.
 
 ### Terminal 2 — Start the NOVA Desktop App (Next.js + Tauri 2)
 
@@ -42,7 +42,7 @@ python -m venv engine\.venv
 pnpm exec tauri dev
 ```
 
-Run `run.bat` or `run.ps1` to install or update all backend dependencies, start the speech engine, and open the desktop app. If an older speech engine is already listening on port 8000, close it before running the launcher so Qwen3-ASR can start.
+Run `run.bat` or `run.ps1` to start the speech engine and open the desktop app. `run.ps1` installs or updates backend dependencies. If another service is listening on port 8000, close it before launching Pekka.
 
 *(Optional: to run only the Next.js web frontend without Tauri, run `pnpm dev` and open `http://localhost:3000`.)*
 
